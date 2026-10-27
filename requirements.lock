@@ -194,6 +194,9 @@ colorama==0.4.6 \
 decorator==5.3.1 \
     --hash=sha256:4cbcdd55a6efadb9dbea26b858f4fb3264567b52d69ca0d25b721b553f60ea82 \
     --hash=sha256:f47fe6fdbd2edd623ecfe36875d37aba411624e2670dd395dddae1358689bb3c
+distro==1.9.0 \
+    --hash=sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed \
+    --hash=sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2
 frozendict==2.4.7 \
     --hash=sha256:05dd27415f913cd11649009f53d97eb565ce7b76787d7869c4733738c10e8d27 \
     --hash=sha256:0664092614d2b9d0aa404731f33ad5459a54fe8dab9d1fd45aa714fa6de4d0ef \
