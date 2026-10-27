@@ -1,0 +1,26 @@
+{
+  "assets/_wa_fraunces_normal.woff2": {
+    "url": "https://registry.npmjs.org/@fontsource-variable/fraunces/-/fraunces-5.3.0.tgz",
+    "member": "package/files/fraunces-latin-wght-normal.woff2",
+    "sha256": "7f9d191d999336d3b9790afa72e1358e50a13b06d4f289341e92a311967a80f9"
+  },
+  "assets/_wa_fraunces_italic.woff2": {
+    "url": "https://registry.npmjs.org/@fontsource-variable/fraunces/-/fraunces-5.3.0.tgz",
+    "member": "package/files/fraunces-latin-wght-italic.woff2",
+    "sha256": "bceec2ef4d549efbc8df0194a8d5280b6a64c3e399244dffccd9ea1bd9ad6db7"
+  },
+  "licenses/Fraunces-OFL-1.1.txt": {
+    "url": "https://registry.npmjs.org/@fontsource-variable/fraunces/-/fraunces-5.3.0.tgz",
+    "member": "package/LICENSE",
+    "sha256": "cd3384cafac6f2bddc3955273958a2e029f97027c8037ac539ef5744a77b579e"
+  },
+  "licenses/Lucide-ISC.txt": {
+    "url": "https://registry.npmjs.org/lucide-react/-/lucide-react-0.468.0.tgz",
+    "member": "package/LICENSE",
+    "sha256": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc"
+  },
+  "licenses/CC-BY-4.0.txt": {
+    "url": "https://creativecommons.org/licenses/by/4.0/legalcode.txt",
+    "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+  }
+}

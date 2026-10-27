@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "word-atlas-anki"
+version = "0.1.0"
+description = "Reproducible offline Word Atlas decks with stable Anki identities"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = ["genanki==0.13.1"]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "playwright==1.64.1", "anki==26.9.3"]
+
+[project.scripts]
+word-atlas-anki = "word_atlas_anki.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = ["browser: real Chromium layout and player lifecycle tests", "integration: official Anki import/export tests"]

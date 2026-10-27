@@ -1,0 +1,106 @@
+<article class="wa-card" data-side="back" data-cefr="{{CEFR}}">
+  <div class="wa-entry">
+    {{#Image}}<div class="wa-art">{{Image}}</div>{{/Image}}
+    <div class="wa-entry-body">
+      <header class="wa-entry-header">
+        <div class="wa-tags">
+          {{#CEFR}}<span class="wa-chip wa-level">{{CEFR}}</span>{{/CEFR}}
+          {{#Topic}}<span class="wa-chip">{{Topic}}</span>{{/Topic}}
+        </div>
+        <h1 class="wa-headword" lang="en">{{Word}}</h1>
+        <div class="wa-pronunciations" aria-label="Pronunciation">
+          <div class="wa-pronunciation" data-accent="uk">
+            {{#AudioUK}}<span class="wa-native-audio" data-audio-label="UK pronunciation">{{AudioUK}}</span>{{/AudioUK}}
+            <span class="wa-ipa-pill"><em>UK</em><span class="wa-ipa" lang="en-GB">{{IPAUK}}{{^IPAUK}}<span class="wa-ipa-missing">IPA unavailable</span>{{/IPAUK}}</span></span>
+          </div>
+          <div class="wa-pronunciation wa-manual" data-accent="us" data-audio-label="US pronunciation">
+            {{#AudioUS}}
+            <button class="wa-manual-button" type="button" aria-label="Play US pronunciation" title="Play US pronunciation" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-6 4H2v6h3l6 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+            </button>
+            {{/AudioUS}}
+            <span class="wa-ipa-pill"><em>US</em><span class="wa-ipa" lang="en-US">{{IPAUS}}{{^IPAUS}}<span class="wa-ipa-missing">IPA unavailable</span>{{/IPAUS}}</span></span>
+            {{#AudioUS}}<span class="wa-manual-media">{{AudioUS}}</span>{{/AudioUS}}
+          </div>
+        </div>
+      </header>
+
+      {{#Senses}}<section class="wa-meanings" aria-label="释义">{{Senses}}</section>{{/Senses}}
+
+      <div class="wa-examples">
+      {{#Example1}}
+      <section class="wa-block wa-example" aria-label="日常例句">
+        <div class="wa-section-heading">
+          <h2 class="wa-eyebrow">例句 {{#Example2}}<span class="wa-example-tag">日常</span>{{/Example2}}</h2>
+          {{#AudioExample1}}<span class="wa-native-audio" data-audio-label="First example">{{AudioExample1}}</span>{{/AudioExample1}}
+        </div>
+        <p class="wa-example-en" lang="en">{{Example1}}</p>
+        {{#Translation1}}<p class="wa-translation">{{Translation1}}</p>{{/Translation1}}
+      </section>
+      {{/Example1}}
+
+      {{#Example2}}
+      <section class="wa-block wa-example" aria-label="雅思例句">
+        <div class="wa-section-heading">
+          <h2 class="wa-eyebrow">例句 <span class="wa-example-tag wa-example-tag--extended">雅思语境</span></h2>
+          {{#AudioExample2}}
+          <span class="wa-manual" data-audio-label="Second example">
+            <button class="wa-manual-button" type="button" aria-label="Play second example" title="Play second example" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-6 4H2v6h3l6 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+            </button>
+            <span class="wa-manual-media">{{AudioExample2}}</span>
+          </span>
+          {{/AudioExample2}}
+        </div>
+        <p class="wa-example-en" lang="en">{{Example2}}</p>
+        {{#Translation2}}<p class="wa-translation">{{Translation2}}</p>{{/Translation2}}
+      </section>
+      {{/Example2}}
+      </div>
+
+      <div class="wa-support">
+      {{#Collocations}}
+      <section class="wa-block">
+        <h2 class="wa-eyebrow">常用搭配</h2>
+        {{Collocations}}
+      </section>
+      {{/Collocations}}
+
+      <div class="wa-relations-stack">
+      {{#Family}}
+      <section class="wa-block wa-relations">
+        <h2 class="wa-eyebrow">词族</h2>
+        <div class="wa-terms" lang="en">{{Family}}</div>
+      </section>
+      {{/Family}}
+      {{#Synonyms}}
+      <section class="wa-block wa-relations">
+        <h2 class="wa-eyebrow">近义</h2>
+        <div class="wa-terms" lang="en">{{Synonyms}}</div>
+      </section>
+      {{/Synonyms}}
+      {{#Antonyms}}
+      <section class="wa-block wa-relations">
+        <h2 class="wa-eyebrow">反义</h2>
+        <div class="wa-terms" lang="en">{{Antonyms}}</div>
+      </section>
+      {{/Antonyms}}
+      </div>
+      </div>
+
+      <div class="wa-notes">
+      {{#Tip}}
+      <aside class="wa-tip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18h6m-5 4h4M9 14a6 6 0 1 1 6 0c-1 .8-1 1.5-1 2h-4c0-.5 0-1.2-1-2Z"/></svg>
+        <div><p>{{Tip}}</p></div>
+      </aside>
+      {{/Tip}}
+      {{#UsageNote}}<aside class="wa-usage-note"><h2 class="wa-eyebrow">用法提醒</h2><p>{{UsageNote}}</p></aside>{{/UsageNote}}
+      </div>
+
+      <p class="wa-audio-status" role="status" aria-live="polite" hidden></p>
+    </div>
+  </div>
+  <div class="wa-native-stop" hidden aria-hidden="true">[sound:_wa_stop.wav]</div>
+</article>
+<!-- WA_SCRIPT -->

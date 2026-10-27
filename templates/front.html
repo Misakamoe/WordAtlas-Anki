@@ -1,0 +1,35 @@
+<article class="wa-card" data-side="front" data-cefr="{{CEFR}}">
+  <header class="wa-front-header">
+    <span class="wa-brand">Word Atlas</span>
+    {{#AtlasID}}<span class="wa-specimen">{{AtlasID}}</span>{{/AtlasID}}
+  </header>
+
+  <div class="wa-front-body">
+    <h1 class="wa-headword" lang="en">{{Word}}</h1>
+    <div class="wa-pronunciations" aria-label="Pronunciation">
+      <div class="wa-pronunciation" data-accent="uk">
+        {{#AudioUK}}<span class="wa-native-audio" data-audio-label="UK pronunciation">{{AudioUK}}</span>{{/AudioUK}}
+        <span class="wa-ipa-pill"><em>UK</em><span class="wa-ipa" lang="en-GB">{{IPAUK}}{{^IPAUK}}<span class="wa-ipa-missing">IPA unavailable</span>{{/IPAUK}}</span></span>
+      </div>
+      <div class="wa-pronunciation wa-manual" data-accent="us" data-audio-label="US pronunciation">
+        {{#AudioUS}}
+        <button class="wa-manual-button" type="button" aria-label="Play US pronunciation" title="Play US pronunciation" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-6 4H2v6h3l6 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        </button>
+        {{/AudioUS}}
+        <span class="wa-ipa-pill"><em>US</em><span class="wa-ipa" lang="en-US">{{IPAUS}}{{^IPAUS}}<span class="wa-ipa-missing">IPA unavailable</span>{{/IPAUS}}</span></span>
+        {{#AudioUS}}<span class="wa-manual-media">{{AudioUS}}</span>{{/AudioUS}}
+      </div>
+    </div>
+  </div>
+
+  <footer class="wa-front-footer">
+    <div class="wa-tags" aria-label="Difficulty and topic">
+      {{#CEFR}}<span class="wa-chip wa-level">{{CEFR}}</span>{{/CEFR}}
+      {{#Topic}}<span class="wa-chip">{{Topic}}</span>{{/Topic}}
+    </div>
+  </footer>
+  <p class="wa-audio-status" role="status" aria-live="polite" hidden></p>
+  <div class="wa-native-stop" hidden aria-hidden="true">[sound:_wa_stop.wav]</div>
+</article>
+<!-- WA_SCRIPT -->

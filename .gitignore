@@ -1,0 +1,15 @@
+.venv/
+.cache/
+dist/
+build/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+test-results/
+.coverage
+.kilo/
+*.apkg
+*.colpkg
+*.anki2
+*.anki21
+*.log
