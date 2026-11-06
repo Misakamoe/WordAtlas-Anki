@@ -932,6 +932,16 @@ html {
   .card {
     padding-block: 4px;
   }
+
+  @media not all and (min-width: 1200px) {
+    .wa-entry-body {
+      padding-block: 6px;
+    }
+
+    .wa-art {
+      top: 10px;
+    }
+  }
 }
 
 @media not all and (min-width: 760px) {

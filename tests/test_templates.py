@@ -157,6 +157,8 @@ def test_layouts_and_opposite_os_theme(browser, rendered, width, height, theme, 
     (760, 640, 1, "light"),
     (768, 1024, 1, "light"),
     (960, 640, 1, "light"),
+    (960, 660, 1, "light"),
+    (960, 661, 1, "light"),
     (1199, 800, 1, "light"),
 ])
 def test_mobile_illustration_geometry(browser, rendered, width, height, scale, theme):
@@ -178,6 +180,9 @@ def test_mobile_illustration_geometry(browser, rendered, width, height, scale, t
             assert art["width"] == pytest.approx(size, abs=1)
             assert art["height"] == pytest.approx(size, abs=1)
             assert page.locator(".wa-art").evaluate("e => getComputedStyle(e).position") == "absolute"
+            padding = page.locator(".wa-entry-body").evaluate("e => [getComputedStyle(e).paddingTop, getComputedStyle(e).paddingBottom]")
+            assert padding == (["6px", "6px"] if height <= 660 else ["10px", "10px"])
+            assert page.locator(".wa-art").evaluate("e => getComputedStyle(e).top") == ("10px" if height <= 660 else "14px")
             header = page.locator(".wa-entry-header").bounding_box()
             assert art["y"] + art["height"] <= header["y"] + header["height"] + 1
         open_card(page, rendered, "zeta", "back", theme=theme)
