@@ -3,8 +3,13 @@ name: Release
 on:
   push:
   workflow_dispatch:
+    inputs:
+      cleanup_dry_run:
+        description: 'Preview cleanup without deleting runs; release still runs normally'
+        type: boolean
+        default: true
   schedule:
-    - cron: '23 3 * * *'
+    - cron: '23 3 */3 * *'
 
 permissions:
   contents: read
@@ -88,7 +93,7 @@ jobs:
             test-results/
             .cache/release-state.json
           include-hidden-files: true
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: ignore
 
   publish:
@@ -124,3 +129,67 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m word_atlas_anki publish --repo "$GITHUB_REPOSITORY" --out dist --state .cache/release-state.json
+
+  cleanup:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete completed workflow runs older than seven days
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          CLEANUP_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.cleanup_dry_run }}
+        with:
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+            const dryRun = process.env.CLEANUP_DRY_RUN === 'true';
+            const counts = {scanned: 0, candidates: 0, deleted: 0, would_delete: 0, skipped: 0, failed: 0};
+            const eligible = run => String(run.id) !== String(context.runId)
+              && run.status === 'completed'
+              && Date.parse(run.created_at) < cutoff
+              && Date.parse(run.updated_at) < cutoff;
+            try {
+              // Unfiltered pagination avoids the search cap; finish listing before any deletion.
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                ...context.repo, per_page: 100
+              });
+              counts.scanned = runs.length;
+              const candidates = new Set(runs.filter(eligible).map(run => String(run.id)));
+              counts.candidates = candidates.size;
+              counts.skipped = runs.length - candidates.size;
+              for (const runId of candidates) {
+                core.info(`Checking workflow run ${runId}`);
+                const {data: run} = await github.rest.actions.getWorkflowRun({
+                  ...context.repo, run_id: runId
+                });
+                // An old run may have been rerun since it was listed.
+                if (!eligible(run)) {
+                  counts.skipped++;
+                  continue;
+                }
+                if (dryRun) {
+                  core.info(`Would delete workflow run ${runId}`);
+                  counts.would_delete++;
+                } else {
+                  await github.rest.actions.deleteWorkflowRun({...context.repo, run_id: runId});
+                  counts.deleted++;
+                }
+              }
+            } catch (error) {
+              counts.failed++;
+              core.setFailed(error.message);
+            } finally {
+              core.info(JSON.stringify(counts));
+              await core.summary
+                .addHeading('Workflow run cleanup')
+                .addRaw(`Cutoff: ${new Date(cutoff).toISOString()}; dry-run: ${dryRun}\n\n`)
+                .addTable([
+                  [{data: 'Counter', header: true}, {data: 'Count', header: true}],
+                  ...Object.entries(counts).map(([name, value]) => [name, String(value)])
+                ])
+                .write();
+            }

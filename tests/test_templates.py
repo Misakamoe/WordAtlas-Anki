@@ -36,7 +36,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @contextmanager
-def served_cards(out, manifest, temporary, *, selected=None):
+def served_cards(out, manifest, temporary, *, selected=None, port=0):
     with closing(Collection(str(temporary / "preview.anki2"))) as col:
         import_dist(col, out, manifest)
         media = Path(col.media.dir())
@@ -56,7 +56,7 @@ def served_cards(out, manifest, temporary, *, selected=None):
                             '<meta name="viewport" content="width=device-width,initial-scale=1">'
                             '<script>window.__nativeActions=[];</script></head><body class="card">' + markup + '</body></html>')
                 (media / f"_preview_{ident}_{side}.html").write_text(document, encoding="utf-8")
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(media)))
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), functools.partial(QuietHandler, directory=str(media)))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -144,6 +144,73 @@ def test_layouts_and_opposite_os_theme(browser, rendered, width, height, theme, 
         assert failures == []
     finally:
         page.close()
+
+
+@pytest.mark.parametrize("width,height,scale,theme", [
+    (320, 480, 1, "light"),
+    (360, 780, 3, "light"),
+    (360, 780, 3, "nightMode"),
+    (360, 780, 3, "night_mode"),
+    (520, 800, 1, "light"),
+    (640, 360, 1, "light"),
+    (759, 640, 1, "light"),
+    (760, 640, 1, "light"),
+    (768, 1024, 1, "light"),
+    (960, 640, 1, "light"),
+    (1199, 800, 1, "light"),
+])
+def test_mobile_illustration_geometry(browser, rendered, width, height, scale, theme):
+    page = browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=scale)
+    try:
+        open_card(page, rendered, "alpha", "back", theme=theme)
+        assert_layout(page, theme=theme, side="back")
+        image = page.locator(".wa-illustration").bounding_box()
+        art = page.locator(".wa-art").bounding_box()
+        size = min(160, width * 0.4, height * 0.22)
+        assert image["height"] == pytest.approx(size, abs=1)
+        assert image["width"] == pytest.approx(image["height"], abs=1)
+        assert image["x"] + image["width"] / 2 == pytest.approx(art["x"] + art["width"] / 2, abs=1)
+        if width < 760:
+            assert art["height"] == pytest.approx(image["height"] + 17, abs=1)
+            body = page.locator(".wa-entry-body").bounding_box()
+            assert body["y"] >= art["y"] + art["height"] - 1
+        else:
+            assert art["width"] == pytest.approx(size, abs=1)
+            assert art["height"] == pytest.approx(size, abs=1)
+            assert page.locator(".wa-art").evaluate("e => getComputedStyle(e).position") == "absolute"
+            header = page.locator(".wa-entry-header").bounding_box()
+            assert art["y"] + art["height"] <= header["y"] + header["height"] + 1
+        open_card(page, rendered, "zeta", "back", theme=theme)
+        assert page.locator(".wa-art, .wa-illustration").count() == 0
+        assert page.locator(".wa-entry-header").evaluate("e => getComputedStyle(e).paddingRight") == "0px"
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("width", [759, 1199])
+@pytest.mark.parametrize("scale", [1.25, 1.5])
+def test_fractional_viewport_has_no_illustration_fallback(browser, rendered, width, scale):
+    scaled = browser.browser_type.launch(
+        headless=True, executable_path=os.environ.get("WA_BROWSER_EXECUTABLE"),
+        args=[f"--force-device-scale-factor={scale}", f"--window-size={width},900"],
+    )
+    try:
+        # Integer emulated viewports round away the fractional-width query gap.
+        page = scaled.new_page(no_viewport=True)
+        open_card(page, rendered, "alpha", "back")
+        viewport = page.evaluate("({width: visualViewport.width, height: visualViewport.height, scale: visualViewport.scale})")
+        assert viewport["scale"] == 1
+        assert width < viewport["width"] < width + 1, viewport
+        assert_layout(page, theme="light", side="back")
+        image = page.locator(".wa-illustration").bounding_box()
+        size = min(160, viewport["width"] * 0.4, viewport["height"] * 0.22)
+        assert image["width"] == pytest.approx(size, abs=1)
+        assert image["height"] == pytest.approx(size, abs=1)
+        position = page.locator(".wa-art").evaluate("e => getComputedStyle(e).position")
+        assert position == ("static" if width < 760 else "absolute")
+    finally:
+        scaled.close()
 
 
 @pytest.mark.parametrize("side", ["front", "back"])
