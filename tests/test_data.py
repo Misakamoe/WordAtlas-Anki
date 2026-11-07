@@ -6,7 +6,6 @@ import pytest
 from word_atlas_anki.data import load_dataset, load_identities, valid_id
 from word_atlas_anki.render import escape, highlight, render_fields
 from word_atlas_anki.util import BuildError, read_json, run, safe_file, write_json
-from conftest import write_dataset
 
 
 def test_complete_data(upstream):

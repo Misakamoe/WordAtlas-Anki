@@ -75,9 +75,14 @@
 <details>
 <summary>展开开发者说明</summary>
 
-**自动发布**：[Release workflow](.github/workflows/release.yml) 在 Ubuntu 24.04 / Python 3.12 上执行 `release-check` → `release-build` → 验收 → `publish`，以上一版清单为基线。约每三天检查一次，推送或手动触发也会检查；只有输入变化才发布，旧 Actions 记录随检查清理，不影响 Releases。
+**检查与发布**：[CI and Release](.github/workflows/release.yml) 统一执行基础测试，发布依赖其通过。
 
-**本地小样**（Linux/WSL，需 Python 3.12、Git、ffmpeg/ffprobe）：
+- **PR / 非主分支**：只验证，不发布。
+- **主分支推送、手动或约每三天**：检查上游，有输入变化才全量构建、验收并发布。
+- **仅 README/预览文档变化**：无待发布输入时跳过重测试。
+- **清理**：旧 Actions 记录随主分支检查删除，不影响 Releases。
+
+**本地小样**（Linux/WSL，需 Python 3.12、Git、ffmpeg）：
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
@@ -92,6 +97,6 @@ python -m word_atlas_anki verify --out dist/sample --native
 
 `fetch` 与 `build` 的样本数须一致，输出目录须为空；小样只用于本地调试，不要用于更新日常牌组。
 
-测试需另装 Node.js 24 与 Playwright Chromium，命令见 [CI workflow](.github/workflows/ci.yml)。本地会生成 `changes.json` 和 `release-notes.md` 供验收，但公开 Release 只上传 `.apkg`、`manifest.json` 和 `SHA256SUMS`。
+测试需另装 Node.js 24 与 Playwright Chromium，命令见 [CI and Release](.github/workflows/release.yml)。本地会生成 `changes.json` 和 `release-notes.md` 供验收，但公开 Release 只上传 `.apkg`、`manifest.json` 和 `SHA256SUMS`。
 
 </details>

@@ -433,35 +433,68 @@ def test_publication_stops_if_another_version_was_published(monkeypatch, built, 
 
 
 def test_workflow_permissions_actions_and_default_branch():
-    for filename in ("ci.yml", "release.yml"):
-        workflow = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text(encoding="utf-8"))
-        assert workflow["permissions"] == {"contents": "read"}
-        for name, job in workflow["jobs"].items():
-            permissions = {"publish": {"contents": "write"}, "cleanup": {"actions": "write"}}
-            assert job.get("permissions", workflow["permissions"]) == permissions.get(name, {"contents": "read"})
-            assert not job.get("continue-on-error")
-            for step in job["steps"]:
-                if "uses" in step:
-                    assert re.fullmatch(r"actions/[a-z-]+@[0-9a-f]{40}", step["uses"])
-                if step.get("uses", "").startswith("actions/upload-artifact@"):
-                    assert step["with"]["retention-days"] == 7
     release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))
+    assert release["name"] == "CI and Release"
+    assert not (ROOT / ".github/workflows/ci.yml").exists()
+    assert set(release["jobs"]) == {"test", "publish", "cleanup"}
+    assert release["permissions"] == {"contents": "read"}
+    for name, job in release["jobs"].items():
+        permissions = {"publish": {"contents": "write"}, "cleanup": {"actions": "write"}}
+        assert job.get("permissions", release["permissions"]) == permissions.get(name, {"contents": "read"})
+        assert not job.get("continue-on-error")
+        for step in job["steps"]:
+            assert not step.get("continue-on-error")
+            if "uses" in step:
+                assert re.fullmatch(r"actions/[a-z-]+@[0-9a-f]{40}", step["uses"])
+            if step.get("uses", "").startswith("actions/upload-artifact@"):
+                assert step["with"]["retention-days"] == 7
     # PyYAML's YAML 1.1 loader treats the unquoted key "on" as True.
     triggers = release.get("on", release.get(True))
-    assert set(triggers) == {"push", "workflow_dispatch", "schedule"}
-    assert triggers["push"] is None
+    assert set(triggers) == {"push", "pull_request", "workflow_dispatch", "schedule"}
+    assert triggers["push"] == {"branches": ["**"]}
+    assert triggers["pull_request"] is None
     assert triggers["schedule"] == [{"cron": "23 3 */3 * *"}]
     inputs = triggers["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"cleanup_dry_run"}
     assert inputs["cleanup_dry_run"]["type"] == "boolean"
     assert inputs["cleanup_dry_run"]["default"] is True
     assert "release still runs" in inputs["cleanup_dry_run"]["description"]
-    assert release["jobs"]["build"]["if"] == "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
-    assert release["jobs"]["publish"]["permissions"] == {"contents": "write"}
-    assert release["jobs"]["publish"]["needs"] == "build"
-    assert release["concurrency"] == {"group": "word-atlas-release", "cancel-in-progress": False}
+    default_ref = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    trusted_branch = "github.event_name != 'pull_request' && " + default_ref
+    validation = "steps.scope.outputs.test_required == 'true' || steps.check.outputs.needs_update == 'true'"
+    setup = "steps.scope.outputs.test_required == 'true' || (" + trusted_branch + ")"
+    test = release["jobs"]["test"]
+    assert test["if"] == "github.event.deleted != true"
+    assert test["timeout-minutes"] == "${{ " + default_ref + " && 120 || 30 }}"
+    assert test["outputs"] == {"needs_update": "${{ steps.check.outputs.needs_update }}", "builder_sha": "${{ steps.check.outputs.builder_sha }}"}
+    steps = {step["name"]: step for step in test["steps"] if "name" in step}
+    ids = {step["id"]: step for step in test["steps"] if "id" in step}
+    assert test["steps"][0]["with"] == {"ref": "${{ github.sha }}", "fetch-depth": 0, "persist-credentials": False}
+    assert next(step for step in test["steps"] if step.get("uses", "").startswith("actions/setup-python@"))["if"] == setup
+    assert steps["Install verified builder"]["if"] == setup
+    assert ids["check"]["if"] == trusted_branch
+    assert ids["check"]["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert steps["Install validation tools"]["if"] == validation
+    assert ids["tests"]["if"] == validation
+    assert ids["tests"]["run"].splitlines() == ["node --check templates/card.js", "python -m pytest --junitxml=test-results/pytest.xml"]
+    assert sum("python -m pytest --junitxml=" in step.get("run", "") for job in release["jobs"].values() for step in job["steps"]) == 1
+    for name in ("Build full offline deck from the checked snapshot", "Test real full-deck layouts", "Transfer complete candidate", "Transfer preflight state"):
+        assert steps[name]["if"] == "steps.check.outputs.needs_update == 'true'"
+        assert test["steps"].index(steps[name]) > test["steps"].index(ids["tests"])
+    assert "verify --out dist --release --native" in steps["Build full offline deck from the checked snapshot"]["run"]
+    assert steps["Test real full-deck layouts"]["env"] == {"WA_REAL_DIST": "dist"}
+    assert steps["Keep test and build diagnostics"]["if"] == "always() && (steps.tests.outcome != 'skipped' || failure())"
+    publish = release["jobs"]["publish"]
+    assert publish["permissions"] == {"contents": "write"}
+    assert publish["needs"] == "test"
+    assert publish["if"] == trusted_branch + " && needs.test.outputs.needs_update == 'true'"
+    assert publish["steps"][0]["with"]["ref"] == "${{ needs.test.outputs.builder_sha }}"
+    assert release["concurrency"] == {
+        "group": "${{ " + default_ref + " && 'word-atlas-release' || format('ci-{0}', github.ref) }}",
+        "cancel-in-progress": "${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}",
+    }
     cleanup = release["jobs"]["cleanup"]
-    assert cleanup["if"] == release["jobs"]["build"]["if"]
+    assert cleanup["if"] == trusted_branch + " && github.event.deleted != true"
     assert "needs" not in cleanup
     assert cleanup["timeout-minutes"] == 10
     assert len(cleanup["steps"]) == 1
@@ -474,6 +507,83 @@ def test_workflow_permissions_actions_and_default_branch():
     assert step["with"]["retry-exempt-status-codes"] == "400,401,403,404,422"
     assert "${{" not in step["with"]["script"]
     assert not (ROOT / ".github/workflows/cleanup.yml").exists()
+
+
+@pytest.fixture
+def workflow_scope(monkeypatch, tmp_path):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8"))
+    step = next(step for step in workflow["jobs"]["test"]["steps"] if step.get("id") == "scope")
+    lines = step["run"].splitlines()
+    assert lines[0] == "python3 - <<'PY'" and lines[-1] == "PY"
+    script = "\n".join(lines[1:-1])
+
+    def run(event_name, paths=b"", *, base="a" * 40, head="b" * 40, git_error=False):
+        event = {"before": base} if event_name == "push" else {"pull_request": {"base": {"sha": base}}}
+        event_path, output = tmp_path / "event.json", tmp_path / "output"
+        write_json(event_path, event)
+        output.write_text("", encoding="utf-8")
+        for key, value in {"GITHUB_EVENT_NAME": event_name, "GITHUB_EVENT_PATH": str(event_path),
+                           "GITHUB_OUTPUT": str(output), "GITHUB_SHA": head}.items():
+            monkeypatch.setenv(key, value)
+        calls = []
+
+        def diff(args, **kwargs):
+            assert args == ["git", "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, head, "--"]
+            assert kwargs == {"stderr": subprocess.DEVNULL}
+            calls.append(args)
+            if git_error:
+                raise subprocess.CalledProcessError(128, args)
+            return paths
+
+        monkeypatch.setattr(subprocess, "check_output", diff)
+        exec(compile(script, "release.yml:scope", "exec"), {})
+        result = output.read_text(encoding="utf-8").strip()
+        assert result in ("test_required=true", "test_required=false")
+        return result == "test_required=true", calls
+
+    return run
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+@pytest.mark.parametrize("paths,expected", [
+    (b"", False),
+    (b"README.md\0docs/preview/back.png\0", False),
+    (b"docs/name\nwith-newline.md\0", False),
+    (b"src/word_atlas_anki/builder.py\0", True),
+    (b"docs/moved.py\0src/removed.py\0", True),
+    (b"tests/test_data.py\0", True),
+    (b".github/workflows/release.yml\0", True),
+    (b".github/ISSUE_TEMPLATE/bug_report.yml\0", True),
+    (b"licenses/Word-Atlas-content.txt\0", True),
+    (b"config/release-policy.json\0", True),
+    (b"requirements.lock\0", True),
+])
+def test_workflow_scope_only_skips_documentation(workflow_scope, event, paths, expected):
+    required, calls = workflow_scope(event, paths)
+    assert required is expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+@pytest.mark.parametrize("base", [None, "0" * 40, "--no-index"])
+def test_workflow_scope_unknown_base_requires_checks(workflow_scope, event, base):
+    required, calls = workflow_scope(event, b"README.md\0", base=base)
+    assert required is True
+    assert calls == []
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_workflow_scope_diff_failure_requires_checks(workflow_scope, event):
+    required, calls = workflow_scope(event, git_error=True)
+    assert required is True
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("event,expected", [("workflow_dispatch", True), ("schedule", False)])
+def test_workflow_scope_manual_and_scheduled_checks(workflow_scope, event, expected):
+    required, calls = workflow_scope(event)
+    assert required is expected
+    assert calls == []
 
 
 @pytest.fixture

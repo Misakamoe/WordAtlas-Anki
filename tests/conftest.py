@@ -1,4 +1,3 @@
-import copy
 import shutil
 from pathlib import Path
 

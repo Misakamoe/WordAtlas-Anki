@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from .util import BuildError, write_json
+from .util import BuildError
 
 
 def main():
