@@ -10,12 +10,28 @@ import yaml
 
 from word_atlas_anki import publication as pub
 from word_atlas_anki.constants import ROOT
+from word_atlas_anki.manifest import seal
 from word_atlas_anki.util import BuildError, file_digest, write_json
+from word_atlas_anki.verify import verify_dist
+
+
+def asset(path):
+    return {"name": path.name, "state": "uploaded", "size": path.stat().st_size, "digest": "sha256:" + file_digest(path)}
 
 
 def assets(directory):
-    return [{"name": path.name, "state": "uploaded", "size": path.stat().st_size, "digest": "sha256:" + file_digest(path)}
-            for path in sorted(directory.iterdir()) if path.is_file()]
+    return [asset(path) for path in sorted(directory.iterdir()) if path.is_file()]
+
+
+def release_files(directory, checksum_directory, *, legacy=False):
+    paths = {path.name: path for path in directory.iterdir() if path.is_file()}
+    if not legacy:
+        paths = {name: path for name, path in paths.items() if name.endswith(".apkg") or name == "manifest.json"}
+        checksum_directory.mkdir(parents=True, exist_ok=True)
+        checksum_path = checksum_directory / "SHA256SUMS"
+        checksum_path.write_text("".join(f"{file_digest(paths[name])}  {name}\n" for name in sorted(paths)), encoding="utf-8")
+        paths["SHA256SUMS"] = checksum_path
+    return paths
 
 
 def test_baseline_includes_prereleases_but_not_drafts():
@@ -36,6 +52,62 @@ def test_unreadable_baseline_is_not_first_release(monkeypatch, tmp_path):
     assert pub.baseline("owner/repo", None, tmp_path) is None
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("problem", [None, "missing", "duplicate", "unexpected", "missing-checksum",
+                                     "unexpected-checksum", "manifest-digest", "package-digest", "tag"])
+def test_baseline_accepts_only_verified_recognized_asset_sets(monkeypatch, built, tmp_path, legacy, problem):
+    out, original, _ = built
+    manifest = copy.deepcopy(original)
+    manifest.update(fixture=False, builder_sha="a" * 40)
+    source = tmp_path / "source"
+    source.mkdir()
+    write_json(source / "manifest.json", seal(manifest))
+    checksums = pub.read_checksums(out)
+    checksums["manifest.json"] = file_digest(source / "manifest.json")
+    if not legacy:
+        for name in ("changes.json", "release-notes.md"):
+            del checksums[name]
+    release = {"tag_name": "wa-" + manifest["input_fingerprint"], "draft": False,
+               "assets": [{"name": name} for name in sorted(set(checksums) | {"SHA256SUMS"})]}
+    package = manifest["packages"][0]["name"]
+    if problem == "missing":
+        release["assets"] = [record for record in release["assets"] if record["name"] != package]
+    elif problem == "duplicate":
+        release["assets"].append({"name": package})
+    elif problem == "unexpected":
+        release["assets"].append({"name": "extra.txt"})
+    elif problem == "missing-checksum":
+        del checksums[package]
+    elif problem == "unexpected-checksum":
+        checksums["extra.txt"] = "0" * 64
+        release["assets"].append({"name": "extra.txt"})
+    elif problem == "manifest-digest":
+        checksums["manifest.json"] = "0" * 64
+    elif problem == "package-digest":
+        checksums[package] = "0" * 64
+    elif problem == "tag":
+        release["tag_name"] = "wa-" + "0" * 64
+    (source / "SHA256SUMS").write_text("".join(f"{checksum}  {name}\n" for name, checksum in sorted(checksums.items())), encoding="utf-8")
+    downloads = []
+
+    def download(*args, **kwargs):
+        assert args[:3] == ("release", "download", release["tag_name"])
+        assert [args[i + 1] for i, arg in enumerate(args) if arg == "--pattern"] == ["manifest.json", "SHA256SUMS"]
+        destination = Path(args[args.index("--dir") + 1])
+        for name in ("manifest.json", "SHA256SUMS"):
+            (destination / name).write_bytes((source / name).read_bytes())
+            downloads.append(name)
+        return ""
+
+    monkeypatch.setattr(pub, "gh", download)
+    if problem:
+        with pytest.raises(BuildError, match="Published baseline"):
+            pub.baseline("owner/repo", release, tmp_path / "baseline")
+    else:
+        assert pub.baseline("owner/repo", release, tmp_path / "baseline") == manifest
+    assert downloads == ["manifest.json", "SHA256SUMS"]
+
+
 def test_preflight_skips_unchanged_inputs_without_fetching_media(monkeypatch, built, tmp_path):
     _, manifest, entries = built
     release = {"id": 1, "draft": False, "published_at": "2026-10-27", "tag_name": "wa-" + manifest["input_fingerprint"]}
@@ -54,15 +126,19 @@ def test_preflight_skips_unchanged_inputs_without_fetching_media(monkeypatch, bu
     assert state["previous_tag"] == release["tag_name"]
 
 
-@pytest.mark.parametrize("problem", ["missing", "duplicate", "bytes", "digest", "uploading"])
-def test_attachment_gate_rejects_incomplete_or_corrupt_assets(built, problem):
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("problem", ["missing", "duplicate", "unexpected", "bytes", "digest", "uploading"])
+def test_attachment_gate_rejects_incomplete_or_corrupt_assets(built, tmp_path, legacy, problem):
     out, _, _ = built
-    release = {"tag_name": "wa-test", "assets": assets(out)}
-    pub.verify_remote_assets("owner/repo", release, out)
+    paths = release_files(out, tmp_path, legacy=legacy)
+    release = {"tag_name": "wa-test", "assets": [asset(path) for path in paths.values()]}
+    pub.verify_remote_assets("owner/repo", release, paths)
     if problem == "missing":
         release["assets"].pop()
     elif problem == "duplicate":
         release["assets"].append(release["assets"][0])
+    elif problem == "unexpected":
+        release["assets"][0]["name"] = "extra.txt"
     elif problem == "bytes":
         release["assets"][0]["size"] += 1
     elif problem == "digest":
@@ -70,10 +146,61 @@ def test_attachment_gate_rejects_incomplete_or_corrupt_assets(built, problem):
     else:
         release["assets"][0]["state"] = "starter"
     with pytest.raises(BuildError):
-        pub.verify_remote_assets("owner/repo", release, out)
+        pub.verify_remote_assets("owner/repo", release, paths)
 
 
-def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, lose_asset=False):
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_attachment_gate_downloads_assets_without_digest(monkeypatch, built, tmp_path, legacy, corrupt):
+    out, _, _ = built
+    paths = release_files(out, tmp_path, legacy=legacy)
+    release = {"tag_name": "wa-test", "assets": [asset(path) for path in paths.values()]}
+    for record in release["assets"]:
+        record.pop("digest")
+    downloads = []
+
+    def download(*args, **kwargs):
+        assert args[:3] == ("release", "download", "wa-test")
+        name = args[args.index("--pattern") + 1]
+        destination = Path(args[args.index("--dir") + 1])
+        content = paths[name].read_bytes()
+        if corrupt:
+            content = bytes([content[0] ^ 1]) + content[1:]
+        (destination / name).write_bytes(content)
+        downloads.append(name)
+        return ""
+
+    monkeypatch.setattr(pub, "gh", download)
+    if corrupt:
+        with pytest.raises(BuildError, match="Downloaded asset checksum mismatch"):
+            pub.verify_remote_assets("owner/repo", release, paths)
+        assert len(downloads) == 1
+    else:
+        pub.verify_remote_assets("owner/repo", release, paths)
+        assert set(downloads) == set(paths)
+
+
+@pytest.mark.parametrize("package_count", [1, 2])
+def test_publication_assets_keep_local_files_and_filter_checksums(tmp_path, package_count):
+    out = tmp_path / "dist"
+    out.mkdir()
+    names = [f"deck-{number}.apkg" for number in range(package_count)]
+    for name in [*names, "manifest.json", "changes.json", "release-notes.md"]:
+        (out / name).write_text(name, encoding="utf-8")
+    (out / "SHA256SUMS").write_text("".join(f"{file_digest(path)}  {path.name}\n" for path in sorted(out.iterdir())), encoding="utf-8")
+    before = {path.name: path.read_bytes() for path in out.iterdir()}
+    with pub.publication_assets(out, {"packages": [{"name": name} for name in names]}) as paths:
+        assert set(paths) == set(names) | {"manifest.json", "SHA256SUMS"}
+        assert all(path == out / name for name, path in paths.items() if name != "SHA256SUMS")
+        checksum_path = paths["SHA256SUMS"]
+        assert checksum_path.parent != out
+        assert pub.read_checksums(checksum_path.parent) == {name: file_digest(paths[name]) for name in paths if name != "SHA256SUMS"}
+        assert {path.name: path.read_bytes() for path in out.iterdir()} == before
+    assert not checksum_path.exists()
+    assert {path.name: path.read_bytes() for path in out.iterdir()} == before
+
+
+def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, legacy=False, lose_asset=False):
     out, original, _ = built
     manifest = copy.deepcopy(original)
     manifest["builder_sha"] = "a" * 40
@@ -84,7 +211,8 @@ def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, lose_asse
     write_json(state_path, state)
     release = {"id": 7, "tag_name": "wa-" + manifest["input_fingerprint"], "draft": not published,
                "prerelease": True, "published_at": "2026-10-26" if published else None,
-               "html_url": "https://github.com/owner/repo/releases/tag/test", "assets": assets(out) if published else []}
+               "html_url": "https://github.com/owner/repo/releases/tag/test",
+               "assets": [asset(path) for path in release_files(out, tmp_path / "published", legacy=legacy).values()] if published else []}
     calls = []
     monkeypatch.setattr(pub, "check_repo", lambda _: {})
     monkeypatch.setattr(pub, "current_builder", lambda *a: manifest["builder_sha"])
@@ -98,7 +226,7 @@ def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, lose_asse
         if method:
             calls.append((method, copy.deepcopy(payload)))
             if payload.get("draft") is False:
-                assert len(release["assets"]) == len(assets(out))
+                assert {record["name"] for record in release["assets"]} == {part["name"] for part in manifest["packages"]} | {"manifest.json", "SHA256SUMS"}
                 release["draft"] = False
         return copy.deepcopy(release)
 
@@ -106,9 +234,14 @@ def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, lose_asse
         assert args[:2] == ("release", "upload")
         assert release["draft"]
         assert kwargs["retry"] is False
-        name = Path(args[3]).name
+        path = Path(args[3])
+        name = path.name
         if not lose_asset or name != "manifest.json":
-            release["assets"].append(next(record for record in assets(out) if record["name"] == name))
+            release["assets"] = [record for record in release["assets"] if record["name"] != name]
+            release["assets"].append(asset(path))
+        if name == "SHA256SUMS":
+            assert path != out / name
+            assert pub.read_checksums(path.parent) == {part["name"]: part["sha256"] for part in manifest["packages"]} | {"manifest.json": file_digest(out / "manifest.json")}
         calls.append(("upload", name))
         return ""
 
@@ -117,21 +250,92 @@ def mocked_publisher(monkeypatch, built, tmp_path, *, published=False, lose_asse
     return out, state_path, release, calls
 
 
-def test_existing_public_release_is_never_overwritten(monkeypatch, built, tmp_path):
-    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path, published=True)
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("download", [False, True])
+def test_existing_public_release_is_never_overwritten(monkeypatch, built, tmp_path, legacy, download):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path, published=True, legacy=legacy)
+    before = assets(out)
+    if download:
+        paths = release_files(out, tmp_path / "download", legacy=legacy)
+        for record in release["assets"]:
+            record.pop("digest")
+
+        def gh(*args, **kwargs):
+            assert args[:3] == ("release", "download", release["tag_name"])
+            name = args[args.index("--pattern") + 1]
+            destination = Path(args[args.index("--dir") + 1])
+            (destination / name).write_bytes(paths[name].read_bytes())
+            return ""
+
+        monkeypatch.setattr(pub, "gh", gh)
     assert pub.publish_release("owner/repo", out, state) == release["html_url"]
+    assert calls == []
+    assert assets(out) == before
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("problem", ["missing", "duplicate", "unexpected", "partial-legacy", "bytes", "digest", "uploading", "checksums"])
+def test_public_retry_rejects_unrecognized_or_corrupt_assets_without_writes(monkeypatch, built, tmp_path, legacy, problem):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path, published=True, legacy=legacy)
+    if problem == "missing":
+        release["assets"].pop()
+    elif problem == "duplicate":
+        release["assets"].append(release["assets"][0])
+    elif problem == "unexpected":
+        release["assets"].append({**release["assets"][0], "name": "extra.txt"})
+    elif problem == "partial-legacy":
+        if legacy:
+            release["assets"] = [record for record in release["assets"] if record["name"] != "changes.json"]
+        else:
+            release["assets"].append(asset(out / "changes.json"))
+    elif problem == "bytes":
+        release["assets"][0]["size"] += 1
+    elif problem == "digest":
+        release["assets"][0]["digest"] = "sha256:" + "0" * 64
+    elif problem == "uploading":
+        release["assets"][0]["state"] = "starter"
+    else:
+        opposite = release_files(out, tmp_path / "opposite", legacy=not legacy)
+        release["assets"] = [record for record in release["assets"] if record["name"] != "SHA256SUMS"]
+        release["assets"].append(asset(opposite["SHA256SUMS"]))
+    with pytest.raises(BuildError, match="Uploaded"):
+        pub.publish_release("owner/repo", out, state)
     assert calls == []
 
 
-def test_draft_promotes_only_after_every_verified_upload(monkeypatch, built, tmp_path):
+@pytest.mark.parametrize("new_draft", [False, True])
+def test_draft_promotes_only_after_every_verified_upload(monkeypatch, built, tmp_path, new_draft):
     out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path)
+    if new_draft:
+        monkeypatch.setattr(pub, "releases", lambda _: [])
+    before = assets(out)
     pub.publish_release("owner/repo", out, state)
+    assert {name for kind, name in calls if kind == "upload"} == {part["name"] for part in built[1]["packages"]} | {"manifest.json", "SHA256SUMS"}
     assert calls[-1][0] == "PATCH"
     assert calls[-1][1]["draft"] is False
     assert calls[-1][1]["prerelease"] is True
     assert calls[-1][1]["make_latest"] == "false"
+    assert calls[-1][1]["body"] == (out / "release-notes.md").read_text(encoding="utf-8")
     assert all(payload.get("draft") is not True for kind, payload in calls if kind == "PATCH")
     assert release["draft"] is False
+    assert assets(out) == before
+    assert verify_dist(out) == built[1]
+
+
+@pytest.mark.parametrize("extra", ["changes.json", "release-notes.md", "legacy", "unexpected.txt"])
+def test_draft_with_leftover_assets_is_not_promoted(monkeypatch, built, tmp_path, extra):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path)
+    if extra == "legacy":
+        release["assets"] = assets(out)
+    else:
+        release["assets"] = [{**asset(out / "changes.json"), "name": extra}]
+    before = assets(out)
+    with pytest.raises(BuildError, match="attachment set"):
+        pub.publish_release("owner/repo", out, state)
+    assert release["draft"] is True
+    assert all(kind == "upload" for kind, _ in calls)
+    assert {name for kind, name in calls if kind == "upload"} == {part["name"] for part in built[1]["packages"]} | {"manifest.json", "SHA256SUMS"}
+    assert assets(out) == before
 
 
 def test_failed_upload_keeps_release_draft(monkeypatch, built, tmp_path):
@@ -171,6 +375,59 @@ def test_reused_draft_is_not_unpublished_if_someone_publishes_it(monkeypatch, bu
 
     monkeypatch.setattr(pub, "api", published_before_upload)
     with pytest.raises(BuildError, match="made public"):
+        pub.publish_release("owner/repo", out, state)
+    assert calls == []
+
+
+def test_draft_made_public_after_uploads_is_not_patched(monkeypatch, built, tmp_path):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path)
+    real_api = pub.api
+    expected = {part["name"] for part in built[1]["packages"]} | {"manifest.json", "SHA256SUMS"}
+
+    def published_after_uploads(endpoint, *, method=None, payload=None):
+        if {record["name"] for record in release["assets"]} == expected:
+            release["draft"] = False
+        return real_api(endpoint, method=method, payload=payload)
+
+    monkeypatch.setattr(pub, "api", published_after_uploads)
+    with pytest.raises(BuildError, match="Draft changed while validating"):
+        pub.publish_release("owner/repo", out, state)
+    assert all(kind == "upload" for kind, _ in calls)
+
+
+@pytest.mark.parametrize("problem", [None, "legacy", "unexpected", "digest"])
+def test_draft_made_public_before_promotion_is_only_verified(monkeypatch, built, tmp_path, problem):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path)
+    real_builder = pub.current_builder
+    builder_checks = []
+
+    def published_before_promotion(*args):
+        builder_checks.append(args)
+        if len(builder_checks) == 2:
+            release["draft"] = False
+            if problem == "legacy":
+                release["assets"] = assets(out)
+            elif problem == "unexpected":
+                release["assets"].append({**release["assets"][0], "name": "extra.txt"})
+            elif problem == "digest":
+                release["assets"][0]["digest"] = "sha256:" + "0" * 64
+        return real_builder(*args)
+
+    monkeypatch.setattr(pub, "current_builder", published_before_promotion)
+    if problem:
+        with pytest.raises(BuildError, match="Uploaded"):
+            pub.publish_release("owner/repo", out, state)
+    else:
+        assert pub.publish_release("owner/repo", out, state) == release["html_url"]
+    assert len(builder_checks) == 2
+    assert all(kind == "upload" for kind, _ in calls)
+
+
+def test_publication_stops_if_another_version_was_published(monkeypatch, built, tmp_path):
+    out, state, release, calls = mocked_publisher(monkeypatch, built, tmp_path)
+    other = {**release, "id": 8, "tag_name": "wa-" + "0" * 64, "draft": False, "published_at": "2026-11-07"}
+    monkeypatch.setattr(pub, "releases", lambda _: [release, other])
+    with pytest.raises(BuildError, match="Another version was published"):
         pub.publish_release("owner/repo", out, state)
     assert calls == []
 
@@ -373,21 +630,64 @@ def test_cleanup_api_errors_fail_visibly(run_cleanup, stage, dry_run, status):
         assert not any(call[0] == "delete" for call in result["calls"])
 
 
-@pytest.mark.parametrize("filename,sections", [
-    ("bug_report.md", ["Problem", "Steps to Reproduce", "Expected and Actual Behavior", "Environment", "Additional Context (Optional)"]),
-    ("feature_request.md", ["Problem or Use Case", "Suggested Solution", "Alternatives (Optional)"]),
+@pytest.mark.parametrize("filename,name,title,fields", [
+    ("bug_report.yml", "Bug Report", "[BUG] ", [
+        ("actual-result", "textarea", "What went wrong?", True),
+        ("reproduction", "textarea", "Steps to Reproduce", True),
+        ("expected-result", "textarea", "Expected Result", True),
+        ("client", "dropdown", "Anki Client", True),
+        ("client-version", "input", "Client Version (Optional)", False),
+        ("deck-version", "input", "Deck Version (Optional)", False),
+        ("operating-system", "input", "Operating System (Optional)", False),
+        ("affected-word", "input", "Affected Word (Optional)", False),
+        ("screenshots", "textarea", "Screenshots (Optional)", False),
+        ("logs", "textarea", "Logs (Optional)", False),
+    ]),
+    ("feature_request.yml", "Feature Request", "[FEATURE] ", [
+        ("problem", "textarea", "Problem or Use Case", True),
+        ("proposed-change", "textarea", "Proposed Change", True),
+        ("alternatives", "textarea", "Alternatives (Optional)", False),
+    ]),
 ])
-def test_issue_template_metadata_and_sections(filename, sections):
+def test_issue_template_metadata_and_sections(filename, name, title, fields):
     directory = ROOT / ".github/ISSUE_TEMPLATE"
     text = (directory / filename).read_text(encoding="utf-8")
     assert text.isascii()
-    _, front_matter, body = text.split("---", 2)
-    metadata = yaml.safe_load(front_matter)
-    assert set(metadata) == {"name", "about"}
-    assert all(isinstance(value, str) and value.strip() for value in metadata.values())
-    assert re.findall(r"^## (.+)$", body, flags=re.MULTILINE) == sections
-    if filename == "bug_report.md":
-        for field in ("Deck version", "Anki client and version", "Operating system", "affected words", "screenshots", "logs"):
-            assert field in body
-        assert "Remove personal information" in body
-    assert not (directory / "config.yml").exists()
+    form = yaml.safe_load(text)
+    assert set(form) == {"name", "description", "title", "body"}
+    assert form["name"] == name
+    assert form["title"] == title
+    assert all(isinstance(form[key], str) and form[key].strip() and form[key].isascii()
+               for key in ("name", "description", "title"))
+    body = form["body"]
+    assert isinstance(body, list) and len(body) == len(fields)
+    assert len({field["id"] for field in body}) == len(body)
+    assert len({field["attributes"]["label"] for field in body}) == len(body)
+    for field, (field_id, field_type, label, required) in zip(body, fields):
+        assert set(field) == {"type", "id", "attributes", "validations"}
+        assert field["id"] == field_id
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", field["id"])
+        assert field["type"] == field_type
+        assert field_type in {"textarea", "input", "dropdown"}
+        assert set(field["validations"]) == {"required"}
+        assert field["validations"]["required"] is required
+        attributes = field["attributes"]
+        assert attributes["label"] == label
+        if field_type == "dropdown":
+            assert set(attributes) == {"label", "options"}
+            options = attributes["options"]
+            assert isinstance(options, list) and options
+            assert all(isinstance(option, str) and option.strip() and option.isascii() for option in options)
+            assert len(options) == len(set(options))
+            assert options == ["Anki Desktop", "AnkiDroid", "AnkiMobile", "AnkiWeb", "Other / build issue"]
+        else:
+            assert set(attributes) == {"label", "description"}
+            assert all(isinstance(value, str) and value.strip() and value.isascii() for value in attributes.values())
+        if field_id in {"screenshots", "logs"}:
+            assert "Remove personal information before sharing." in attributes["description"]
+    assert not list(directory.glob("*.md"))
+    config_text = (directory / "config.yml").read_text(encoding="utf-8")
+    assert config_text.isascii()
+    config = yaml.safe_load(config_text)
+    assert set(config) == {"blank_issues_enabled"}
+    assert config["blank_issues_enabled"] is False

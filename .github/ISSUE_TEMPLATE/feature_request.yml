@@ -1,0 +1,25 @@
+name: Feature Request
+description: Suggest an improvement to the deck or its build.
+title: '[FEATURE] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What problem would this solve, and who would it help?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed Change
+      description: Describe the change you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives (Optional)
+      description: Mention other approaches or workarounds you have considered.
+    validations:
+      required: false

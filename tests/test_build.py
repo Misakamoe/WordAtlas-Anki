@@ -1,3 +1,5 @@
+import copy
+import re
 import shutil
 
 import pytest
@@ -6,6 +8,7 @@ from conftest import NOW, SHA, write_dataset
 from word_atlas_anki.builder import build, read_json_policy
 from word_atlas_anki.manifest import load_manifest, seal
 from word_atlas_anki.media import MediaStore, decode_media
+from word_atlas_anki.release_notes import release_notes
 from word_atlas_anki.upstream import check_licenses
 from word_atlas_anki.util import BuildError, read_json, write_json
 from word_atlas_anki.verify import verify_dist
@@ -22,6 +25,72 @@ def test_package_manifest_and_repeat_timestamps(built, upstream, tmp_path):
     assert manifest["packages"] == again["packages"]
     assert read_json(second / "changes.json")["modified"] == []
     assert verify_dist(second)["note_count"] == 6
+    assert (second / "release-notes.md").read_text(encoding="utf-8") == release_notes(again, read_json(second / "changes.json"))
+
+
+@pytest.mark.parametrize("full,channel", [(True, "stable"), (True, "prerelease"), (False, "stable"), (False, "prerelease")])
+@pytest.mark.parametrize("initial", [False, True])
+def test_release_notes_keep_updates_brief_and_initial_useful(built, full, channel, initial):
+    out, original, _ = built
+    manifest = {**original, "full": full, "channel": channel}
+    changes = read_json(out / "changes.json")
+    changes["initial"] = initial
+    notes = release_notes(manifest, changes)
+    headings = ["本次变化", "内容与下载"]
+    if initial and full:
+        headings += ["导入与兼容", "来源与许可"]
+        assert "先备份集合与媒体" in notes
+        assert "CC BY 4.0" in notes and "非官方" in notes
+    assert re.findall(r"^## (.+)$", notes, flags=re.MULTILINE) == headings
+    assert not re.search(r"^# ", notes, flags=re.MULTILINE)
+    assert ("预发布" in notes) == (channel == "prerelease")
+    assert ("不完整小样" in notes) == (not full)
+    assert ("不可作为全量更新" in notes) == (not full)
+    assert "| 文件 | 词条 | 大小 |" in notes
+    assert "README" in notes and "SHA256SUMS" in notes
+    assert "changes.json" not in notes and "release-notes.md" not in notes
+    assert manifest["input_fingerprint"] not in notes
+    for part in manifest["packages"]:
+        assert part["name"] in notes
+        assert part["sha256"] not in notes
+
+
+def test_release_notes_bound_examples_and_keep_relevant_changes(built):
+    out, manifest, _ = built
+    changes = read_json(out / "changes.json")
+    changes.update(initial=False, template_changed=True, builder_changed=False,
+                   added=[{"word": "[one] | <tag>"}, {"word": "two"}, {"word": "three"}, {"word": "omitted-word"}],
+                   modified=[], confirmed_deleted=[{"word": "removed-word"}],
+                   field_changes={"Word": 1}, media_changes={"uk": 1, "img": 0}, previous_upstream_sha="b" * 40)
+    notes = release_notes(manifest, changes)
+    assert "词条：新增 4，修改 0，确认删除 1" in notes
+    assert "卡片模板" in notes and "构建流程" not in notes
+    assert "词头 1" in notes and "英音单词 1" in notes
+    assert "插画 0" not in notes
+    assert r"\[one\] \| &lt;tag&gt;" in notes
+    assert "omitted-word" not in notes and "removed-word" in notes
+    assert "changes.json" not in notes
+    assert f'compare/{"b" * 40}...{manifest["upstream_sha"]}' in notes
+    changes["media_changes"] = {}
+    assert "已有词条媒体无变化" in release_notes(manifest, changes)
+    changes["previous_upstream_sha"] = manifest["upstream_sha"]
+    assert "/compare/" not in release_notes(manifest, changes)
+
+
+def test_release_notes_explain_multiple_packages_only_when_needed(built):
+    out, original, _ = built
+    changes = read_json(out / "changes.json")
+    assert "全部分包" not in release_notes(original, changes)
+    manifest = copy.deepcopy(original)
+    part = manifest["packages"][0]
+    manifest["packages"] = [
+        {**part, "name": "part-1.apkg", "notes": part["notes"][:3]},
+        {**part, "name": "part-2.apkg", "notes": part["notes"][3:]},
+    ]
+    notes = release_notes(manifest, changes)
+    assert "请导入全部分包" in notes
+    assert "| `part-1.apkg` | 3 |" in notes
+    assert "| `part-2.apkg` | 3 |" in notes
 
 
 def test_sample_explicitly_incomplete(upstream, tmp_path):

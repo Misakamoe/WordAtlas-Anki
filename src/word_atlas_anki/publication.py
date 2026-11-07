@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -79,6 +80,12 @@ def baseline(repo, release, destination):
     manifest = load_manifest(destination / "manifest.json", require_full=True)
     if release["tag_name"] != "wa-" + manifest["input_fingerprint"]:
         raise BuildError("Published baseline tag does not identify its inputs")
+    expected = {part["name"] for part in manifest["packages"]} | {"manifest.json"}
+    if (set(checksums) not in (expected, expected | {"changes.json", "release-notes.md"})
+            or len(names) != len(set(names)) or set(names) != set(checksums) | {"SHA256SUMS"}):
+        raise BuildError("Published baseline attachment set is incomplete or unexpected")
+    if any(checksums[part["name"]] != part["sha256"] for part in manifest["packages"]):
+        raise BuildError("Published baseline package checksum mismatch")
     return manifest
 
 
@@ -140,9 +147,21 @@ def build_release(state_path, out):
     return manifest
 
 
-def verify_remote_assets(repo, release, directory):
-    directory = Path(directory)
-    expected = {path.name: {"bytes": path.stat().st_size, "sha256": file_digest(path)} for path in directory.iterdir() if path.is_file()}
+@contextmanager
+def publication_assets(directory, manifest):
+    checksums = read_checksums(directory)
+    names = {part["name"] for part in manifest["packages"]} | {"manifest.json"}
+    paths = {name: safe_file(directory, name) for name in sorted(names)}
+    # Keep the complete local dist intact; only the published checksum file differs.
+    with tempfile.TemporaryDirectory(prefix="wa-publication-") as temp:
+        checksum_path = Path(temp) / "SHA256SUMS"
+        checksum_path.write_text("".join(f"{checksums[name]}  {name}\n" for name in paths), encoding="utf-8", newline="\n")
+        paths["SHA256SUMS"] = checksum_path
+        yield paths
+
+
+def verify_remote_assets(repo, release, paths):
+    expected = {name: {"bytes": path.stat().st_size, "sha256": file_digest(path)} for name, path in paths.items()}
     assets = release["assets"]
     if len(assets) != len(expected) or {asset["name"] for asset in assets} != set(expected):
         raise BuildError("Uploaded attachment set is incomplete or unexpected")
@@ -183,52 +202,55 @@ def publish_release(repo, out, state_path):
     if len(matches) > 1:
         raise BuildError("Multiple releases claim the same input fingerprint")
     release = matches[0] if matches else None
-    if release and not release["draft"]:
-        # Never overwrite public releases. A same-input retry is a read-only check.
-        verify_remote_assets(repo, release, out)
-        print(release["html_url"])
-        return release["html_url"]
-    latest = latest_published(items)
-    if (latest["tag_name"] if latest else None) != state["previous_tag"]:
-        raise BuildError("Another version was published after preflight; rebuild against its baseline")
-    prerelease = policy["channel"] == "prerelease"
-    title_date = datetime.fromtimestamp(manifest["created_at"], timezone.utc).strftime("%Y-%m-%d")
-    payload = {"tag_name": tag, "target_commitish": builder_sha, "name": f'Word Atlas {title_date}' + (" 预发布" if prerelease else ""),
-               "body": safe_file(out, "release-notes.md").read_text(encoding="utf-8"), "draft": True,
-               "prerelease": prerelease, "make_latest": "false"}
-    if release is None:
-        release = api(f"repos/{repo}/releases", method="POST", payload=payload)
-    if not release["draft"]:
-        raise BuildError("Uploads are only permitted to a draft")
-    out = Path(out)
-    for path in sorted(out.iterdir()):
-        for attempt in range(3):
-            # A failed upload may have succeeded remotely. Guard every retry too.
-            if not api(f"repos/{repo}/releases/{release['id']}")["draft"]:
-                raise BuildError("Draft was made public during upload; refusing to overwrite it")
-            try:
-                gh("release", "upload", tag, str(path), "--repo", repo, "--clobber", retry=False, timeout=900)
-                break
-            except BuildError:
-                if attempt == 2:
-                    raise
-                time.sleep(2 ** attempt)
-    uploaded = api(f"repos/{repo}/releases/{release['id']}")
-    if not uploaded["draft"]:
-        raise BuildError("Draft changed while validating uploads")
-    verify_remote_assets(repo, uploaded, out)
-    # Also re-check trusted source HEAD before advancing latest.
-    current_builder(repo, metadata)
-    current = api(f"repos/{repo}/releases/{release['id']}")
-    if not current["draft"]:
-        verify_remote_assets(repo, current, out)
-        print(current["html_url"])
-        return current["html_url"]
-    payload.update(draft=False, make_latest="false" if prerelease else "true")
-    result = api(f"repos/{repo}/releases/{release['id']}", method="PATCH",
-                 payload=payload)
-    if result["draft"] or result["prerelease"] != prerelease:
-        raise BuildError("GitHub did not finalize the requested release state")
-    verify_remote_assets(repo, result, out)
-    print(result["html_url"])
-    return result["html_url"]
+    with publication_assets(out, manifest) as paths:
+        if release and not release["draft"]:
+            # Never overwrite public releases, including the shipped full-asset format.
+            legacy_names = set(paths) | {"changes.json", "release-notes.md"}
+            if {asset["name"] for asset in release["assets"]} == legacy_names:
+                paths = {name: safe_file(out, name) for name in legacy_names}
+            verify_remote_assets(repo, release, paths)
+            print(release["html_url"])
+            return release["html_url"]
+        latest = latest_published(items)
+        if (latest["tag_name"] if latest else None) != state["previous_tag"]:
+            raise BuildError("Another version was published after preflight; rebuild against its baseline")
+        prerelease = policy["channel"] == "prerelease"
+        title_date = datetime.fromtimestamp(manifest["created_at"], timezone.utc).strftime("%Y-%m-%d")
+        payload = {"tag_name": tag, "target_commitish": builder_sha, "name": f'Word Atlas {title_date}' + (" 预发布" if prerelease else ""),
+                   "body": safe_file(out, "release-notes.md").read_text(encoding="utf-8"), "draft": True,
+                   "prerelease": prerelease, "make_latest": "false"}
+        if release is None:
+            release = api(f"repos/{repo}/releases", method="POST", payload=payload)
+        if not release["draft"]:
+            raise BuildError("Uploads are only permitted to a draft")
+        for name in sorted(paths):
+            for attempt in range(3):
+                # A failed upload may have succeeded remotely. Guard every retry too.
+                if not api(f"repos/{repo}/releases/{release['id']}")["draft"]:
+                    raise BuildError("Draft was made public during upload; refusing to overwrite it")
+                try:
+                    gh("release", "upload", tag, str(paths[name]), "--repo", repo, "--clobber", retry=False, timeout=900)
+                    break
+                except BuildError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(2 ** attempt)
+        uploaded = api(f"repos/{repo}/releases/{release['id']}")
+        if not uploaded["draft"]:
+            raise BuildError("Draft changed while validating uploads")
+        verify_remote_assets(repo, uploaded, paths)
+        # Also re-check trusted source HEAD before advancing latest.
+        current_builder(repo, metadata)
+        current = api(f"repos/{repo}/releases/{release['id']}")
+        if not current["draft"]:
+            verify_remote_assets(repo, current, paths)
+            print(current["html_url"])
+            return current["html_url"]
+        payload.update(draft=False, make_latest="false" if prerelease else "true")
+        result = api(f"repos/{repo}/releases/{release['id']}", method="PATCH",
+                     payload=payload)
+        if result["draft"] or result["prerelease"] != prerelease:
+            raise BuildError("GitHub did not finalize the requested release state")
+        verify_remote_assets(repo, result, paths)
+        print(result["html_url"])
+        return result["html_url"]

@@ -1,0 +1,79 @@
+name: Bug Report
+description: Report a problem with the deck or its build.
+title: '[BUG] '
+body:
+  - type: textarea
+    id: actual-result
+    attributes:
+      label: What went wrong?
+      description: Describe the problem and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: List the steps that trigger the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected-result
+    attributes:
+      label: Expected Result
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Anki Client
+      options:
+        - Anki Desktop
+        - AnkiDroid
+        - AnkiMobile
+        - AnkiWeb
+        - Other / build issue
+    validations:
+      required: true
+  - type: input
+    id: client-version
+    attributes:
+      label: Client Version (Optional)
+      description: Enter the version shown in your client's About screen, if available.
+    validations:
+      required: false
+  - type: input
+    id: deck-version
+    attributes:
+      label: Deck Version (Optional)
+      description: Enter the release tag or downloaded deck filename, if known.
+    validations:
+      required: false
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating System (Optional)
+      description: Enter your OS and version.
+    validations:
+      required: false
+  - type: input
+    id: affected-word
+    attributes:
+      label: Affected Word (Optional)
+      description: Name a word that shows the problem.
+    validations:
+      required: false
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots (Optional)
+      description: Attach an image. Remove personal information before sharing.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (Optional)
+      description: Paste only relevant logs. Remove personal information before sharing.
+    validations:
+      required: false
