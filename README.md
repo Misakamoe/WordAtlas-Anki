@@ -6,127 +6,92 @@
 
 把 [Word Atlas](https://github.com/designfuchen/word-atlas) 的单词、释义、插画和录音，整理成一套**完全离线、可增量更新**的 Anki 牌组。
 
-非官方适配。牌组内容 CC BY 4.0，转换代码 MIT。
+非官方适配。内容 CC BY 4.0，代码 MIT。
 
 **[下载最新版](https://github.com/Misakamoe/WordAtlas-Anki/releases)**
 
 ## 预览
 
-以下截图由实际牌组渲染（词条 `library`）
-
-| 正面：回忆词义 | 背面：完整词条 |
+| 正面 | 背面 |
 | :---: | :---: |
 | ![正面](docs/preview/front.png) | ![背面](docs/preview/back.png) |
-| 单词、英美音标、发音按钮、等级与话题 | 插画、全部释义、双语例句、搭配、词族与提示 |
 
 <p align="center">
   <img src="docs/preview/back-night.png" width="66%" alt="深色模式">
   <img src="docs/preview/back-mobile.png" width="24%" alt="手机竖屏布局">
 </p>
-<p align="center"><sub>深色模式（左）与手机竖屏布局（右）。实际字号和间距会随 Anki 客户端与设备变化。</sub></p>
+<p align="center"><sub>深色模式（左）与手机布局（右），实际效果随客户端和设备略有差异。</sub></p>
 
-## 这套牌组有什么
+## 内容
 
-- **7,298 个词，按 CEFR 分为六级**：A1 785、A2 1,039、B1 1,465、B2 2,127、C1 1,608、C2 274；覆盖 19 个话题。
-- **一词一条笔记、一张正向卡**：正面回忆，背面展开；不包含作者的复习记录或学习进度。
-- **全离线媒体**：每个词都配有插画、英音、美音和第一条例句录音；1,011 个词还有第二条例句录音。图片和音频随牌组打包，不依赖网络。
-- **英美双音标**：UK / US 始终分列显示；缺失的一侧会明确标注，不会复制另一侧冒充。
-- **完整词条**：全部词性与释义、英文释义、1–2 条双语例句、关键词高亮、常用搭配、词族、近义、反义、记忆提示和用法提醒。
-- **跟随 Anki 明暗模式**：浅色为暖纸配色，深色为星光配色；A1–A2 绿色、B1–B2 蓝色、C1–C2 红色区分难度。
-- **可持续更新**：固定 GUID 与固定笔记类型，导入新版不会重建卡片；已有复习进度和挂起状态不会被强制覆盖。自动定时约每三天检查上游，只有有效变化才发布。
-- **可核对**：更新摘要直接显示在 Release 正文，附件保留 `manifest.json` 和 `SHA256SUMS`，包含词条状态、媒体摘要与校验值。
+- **7,298 个词，按 CEFR 分六级**：A1 785、A2 1,039、B1 1,465、B2 2,127、C1 1,608、C2 274，覆盖 19 个话题。
+- **一词一卡**：正面回忆词义，背面展开全部词性、释义、1–2 条双语例句、搭配、词族、近义反义和用法提示。
+- **全离线媒体**：插画、英音、美音和例句录音随包提供；1,011 个词还有第二条例句录音。
+- **英美双音标**：UK / US 分列显示，缺失侧明确标注，不复制另一侧冒充。
+- **明暗主题**：跟随 Anki 自动切换；A1–A2 绿、B1–B2 蓝、C1–C2 红区分难度。
+- **可增量更新**：固定笔记身份，导入新版不重建卡片，复习进度和挂起状态不会被强制覆盖。
 
-## 下载与导入
+## 导入
 
-1. 打开 [Releases](https://github.com/Misakamoe/WordAtlas-Anki/releases)，下载当前版本**全部** `.apkg` 文件。如果一个版本被拆成多个包，它们不是分卷压缩：每个都能独立导入，但请全部导入，才会得到完整词库。
+1. 从 [Releases](https://github.com/Misakamoe/WordAtlas-Anki/releases) 下载当前版本**全部** `.apkg`。如有多个包请全部导入。
 2. 先备份 Anki 集合。
-3. 在 Anki 中选择 **文件 → 导入**，选中 `.apkg`；有多个包时重复导入。
-4. 导入后打开 `Word Atlas`，其下会有 `A1`–`C2` 六个子牌组。
+3. 在 Anki 中选择 **文件 → 导入**。
+4. 打开 `Word Atlas`，其下为 `A1`–`C2` 六个子牌组。
 
-### 建议的音频设置
+## 推荐设置
 
-- 在牌组选项中开启**自动播放**：正面英音只自动播放一次；背面自动播放英音单词和第一条例句。
-- 开启**显示重播按钮**，并在反面重播时选择跳过正面音频。
+- 开启**自动播放**：正面播放英音一次，背面播放英音和第一条例句。
+- 开启**显示重播按钮**，反面重播时跳过正面音频。
 - 美音和第二条例句只在手动点击时播放。第二条例句是另一句话，不是第一句的另一种口音。
+- **移动端建议在设置中开启新 UI（新版学习界面）**。
 - 模板不会修改你的 FSRS、学习步长或牌组预设。
 
-### 更新已有牌组
+## 更新
 
-直接导入新版 `.apkg`，**不要先删除旧牌组**。固定的笔记身份会让 Anki 更新已有笔记，复习进度和挂起状态不会被强制覆盖。
+直接导入新版 `.apkg`，**不必先删除旧牌组**。固定的笔记身份会让 Anki 更新已有笔记。
 
-- 升级前先备份集合和媒体。
-- 移动端图片大小等布局变化随新版笔记类型样式更新。若导入后仍显示旧布局，请确认该卡使用的笔记类型样式已更新，并完成同步，无需删除旧牌组。
-- 如果你在本地修改过源字段，较新的本地编辑可能阻止默认更新。需要强制采用词库版本时，备份后选择“始终更新笔记”；这会覆盖你对相应字段的修改。
-- Anki 26.9.3 后端在更新笔记时会替换标签，自定义标签可能被移除；其他客户端或版本的行为可能不同。请先备份重要标签。
-- 上游删除的词不会自动从旧牌组删卡。查看发布说明，或对比相邻版本的 `manifest.json` 确认变化后，再决定是否保留。
-- 媒体使用新的内容寻址文件名。清理旧媒体前先备份，并使用 Anki 的“检查媒体”，不要按文件日期盲删。
+- 升级前备份集合和媒体。布局变化随笔记类型样式更新；导入后完成同步，若仍显示旧样式，先确认样式已更新。
+- 需要强制采用词库版本时，可备份后选择“始终更新笔记”，这会覆盖你对相应字段的修改。
+- 更新笔记可能替换标签，自定义标签请先备份。
+- 上游删除的词不会自动删卡。媒体使用内容寻址文件名，清理旧媒体前先备份并使用“检查媒体”。
 
-## 牌组结构
+## 兼容性
 
-| 子牌组 | 词数 |
-| --- | ---: |
-| A1 | 785 |
-| A2 | 1,039 |
-| B1 | 1,465 |
-| B2 | 2,127 |
-| C1 | 1,608 |
-| C2 | 274 |
-| **合计** | **7,298** |
-
-词数对应当前上游快照，后续版本可能随上游增删而变化。
-
-## 兼容性与当前状态
-
-- 当前按**预发布**渠道维护。稳定版需要桌面、Android、iOS 三端的实机音频与升级验收，未全部完成前不会标记为 stable。
-- 已在 Anki 26.9.3 后端验证导入/导出、模板渲染和媒体完整性；不同客户端和版本仍可能存在实机差异。
-- 牌组使用 Anki 原生模板、CSS、媒体和 `.apkg` 格式，不修改你的全局学习设置。
-- 不承诺 AnkiWeb 兼容；跨设备使用时，请等导入和同步完成后再离线学习。
-- 仅保证本仓库版本之间的升级契约，不迁移任意旧 CSV 牌组或其他来源的牌组。
+- 当前为**预发布**渠道；稳定版需要桌面、Android、iOS 三端实机验收完成。
+- 已在 Anki 26.9.3 后端验证导入/导出、模板渲染和媒体完整性，不同客户端仍可能有实机差异。
+- 不承诺 AnkiWeb 兼容；跨设备使用时请等导入和同步完成后再离线学习。
+- 仅保证本仓库版本之间的升级，不迁移其他来源或旧 CSV 牌组。
 
 ## 来源与许可
 
-- 词库、插画和成品录音来自 [Word Atlas contributors](https://github.com/designfuchen/word-atlas)，以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授权。
-- 本仓库的转换代码使用 [MIT](LICENSE)。
-- 随包保留的 Fraunces 字体为 OFL 1.1，Lucide 图标为 ISC；完整许可文本见 [licenses](licenses) 和牌组媒体。
-- 本项目是**非官方适配**，与上游 Word Atlas 及雅思官方没有隶属或背书关系，也不是官方雅思词表。
-- 上游内容由 AI 生成，未经逐条人工审校，请按现状使用。录音授权不包含声音模型或声音身份，不代表声音提供方背书。
-- 本仓库只做 Anki 排版、英美双音标、离线媒体命名和播放策略；没有重新生成文本、插画或录音。
+- 词库、插画和成品录音来自 [Word Atlas contributors](https://github.com/designfuchen/word-atlas)，以 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 授权；转换代码使用 [MIT](LICENSE)。
+- 本项目是非官方适配，与上游及雅思官方没有隶属或背书关系，也不是官方雅思词表。
+- 上游内容由 AI 生成，未经逐条人工审校；录音授权不包含声音模型或声音身份。
+- 本仓库只做 Anki 排版、英美双音标、离线媒体命名和播放策略，没有重新生成文本、插画或录音。
+- 完整许可文本见 [licenses](licenses) 和牌组媒体。
 
-## 从源码构建
+## 构建
 
 <details>
-<summary>展开构建步骤</summary>
+<summary>展开开发者说明</summary>
 
-需要 Python 3.12、Git 和 ffmpeg。以下命令在仓库根目录的 PowerShell 中运行。
+**自动发布**：[Release workflow](.github/workflows/release.yml) 在 Ubuntu 24.04 / Python 3.12 上执行 `release-check` → `release-build` → 验收 → `publish`，以上一版清单为基线。约每三天检查一次，推送或手动触发也会检查；只有输入变化才发布，旧 Actions 记录随检查清理，不影响 Releases。
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+**本地小样**（Linux/WSL，需 Python 3.12、Git、ffmpeg/ffprobe）：
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
 python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps --no-build-isolation -e .
 
-# 拉取上游快照和媒体，再读取本次使用的提交号
-python -m word_atlas_anki fetch --upstream .cache/upstream --media
-$sha = git -C .cache/upstream rev-parse HEAD
-python -m word_atlas_anki build --upstream .cache/upstream --upstream-sha $sha --out dist
-python -m word_atlas_anki verify --out dist
+python -m word_atlas_anki fetch --upstream .cache/upstream --media --sample 12
+sha=$(git -C .cache/upstream rev-parse HEAD)
+python -m word_atlas_anki build --upstream .cache/upstream --upstream-sha "$sha" --out dist/sample --sample 12
+python -m word_atlas_anki verify --out dist/sample --native
 ```
 
-`fetch --media` 会拉取全部插图与音频，体积较大。只想生成小样时，可以给 `fetch` 和 `build` 都加上相同的 `--sample 50`。
+`fetch` 与 `build` 的样本数须一致，输出目录须为空；小样只用于本地调试，不要用于更新日常牌组。
 
-本地构建仍生成 `changes.json` 和 `release-notes.md` 供验收与排查，但不再作为 Release 附件上传。公开附件仅包含 `.apkg`、`manifest.json` 和 `SHA256SUMS`；公开校验表只列出牌组与 `manifest.json`。
-
-本地测试还需要 Node.js（建议 24，与 Actions 运行时一致），并确保 `node` 命令位于 `PATH` 中，用于验证清理脚本。安装测试浏览器并运行测试：
-
-```powershell
-python -m playwright install --only-shell chromium
-python -m pytest
-```
-
-仓库自动维护：
-
-- `Release` 在每月 1、4、7……日的 03:23 UTC（北京时间 11:23）检查上游，cron 为 `23 3 */3 * *`；月底可能间隔不足三天。默认分支推送和手动运行也会立即检查。
-- 旧 Actions 记录随 `Release` 一起清理，不单独每日运行：删除已完成且最近更新时间超过 7 天的运行记录及其日志、构建产物，保护运行中的任务和近期重跑的记录。删除不可恢复，但不影响 GitHub Releases 及其发布附件。
-- 手动运行时，`cleanup_dry_run` 默认开启，仅预览清理候选；发布流程仍照常执行。关闭此选项才会实际清理，定时和推送触发则自动清理。
+测试需另装 Node.js 24 与 Playwright Chromium，命令见 [CI workflow](.github/workflows/ci.yml)。本地会生成 `changes.json` 和 `release-notes.md` 供验收，但公开 Release 只上传 `.apkg`、`manifest.json` 和 `SHA256SUMS`。
 
 </details>
