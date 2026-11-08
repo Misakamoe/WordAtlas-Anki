@@ -1,5 +1,6 @@
-"""Actual Anki-rendered HTML with a mock replay bridge, not native-client proof."""
+"""Anki-rendered HTML in native-mock and AnkiWeb hosts, not live-client proof."""
 import functools
+import html
 import http.server
 import json
 import os
@@ -28,6 +29,35 @@ MOCK_AUDIO = """(() => {
   };
   HTMLMediaElement.prototype.pause = function() {this.__paused = true; this.dispatchEvent(new Event('pause'));};
 })();"""
+AUDIO_EVENTS = """(() => {
+  window.__mediaEvents = [];
+  window.__audioKind = audio => {
+    const pronunciation = audio.closest('.wa-pronunciation');
+    if (pronunciation) return pronunciation.dataset.accent;
+    return audio.closest('.wa-example') === document.querySelector('.wa-example') ? 'ex1' : 'ex2';
+  };
+  for (const type of ['play', 'ended', 'error']) {
+    document.addEventListener(type, event => {
+      if (event.target instanceof HTMLAudioElement) {
+        window.__mediaEvents.push({type, kind: window.__audioKind(event.target),
+          active: Array.from(document.querySelectorAll('audio')).filter(audio => !audio.paused).length});
+      }
+    }, true);
+  }
+})();"""
+WEB_AUDIO = MOCK_AUDIO + AUDIO_EVENTS + """(() => {
+  window.__attempts = [];
+  window.__pending = [];
+  Object.defineProperty(HTMLMediaElement.prototype, 'ended', {configurable: true, get() {return this.__ended === true;}});
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function() {
+    window.__attempts.push(window.__audioKind(this));
+    this.__ended = false;
+    if (window.__deferPlay) return new Promise((resolve, reject) => window.__pending.push({reject}));
+    if (window.__rejectPlay) return Promise.reject(new DOMException('autoplay blocked', 'NotAllowedError'));
+    return play.call(this);
+  };
+})();"""
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -36,7 +66,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @contextmanager
-def served_cards(out, manifest, temporary, *, selected=None, port=0):
+def served_cards(out, manifest, temporary, *, selected=None, port=0, host="native"):
+    assert host in ("native", "web")
     with closing(Collection(str(temporary / "preview.anki2"))) as col:
         import_dist(col, out, manifest)
         media = Path(col.media.dir())
@@ -46,15 +77,28 @@ def served_cards(out, manifest, temporary, *, selected=None, port=0):
         for ident in names:
             card = col.get_card(cards[by_guid[manifest["notes"][ident]["guid"]]])
             for side, markup in (("front", card.question()), ("back", card.answer())):
-                # The Rust renderer emits these placeholders; the GUI normally
-                # supplies replay controls. This bridge only records DOM clicks.
-                markup = re.sub(r"\[anki:play:([qa]):(\d+)\]", lambda m:
-                    f'<a class="replay-button soundLink" href="playsound:{m[1]}:{m[2]}" '
-                    f'onclick="window.__nativeActions.push(\'{m[1]}:{m[2]}\'); return false;">'
-                    '<svg viewBox="0 0 64 64"><path d="M24 16 48 32 24 48Z"/></svg></a>', markup)
+                if host == "web":
+                    tags = {"q": card.question_av_tags(), "a": card.answer_av_tags()}
+
+                    def web_audio(match):
+                        filename = tags[match[1]][int(match[2])].filename
+                        # AnkiWeb drops non-MP3 sound tags, including the stop WAV.
+                        if not re.search(r"\.mp3", filename, re.IGNORECASE):
+                            return ""
+                        return f'<audio controls><source src="{html.escape(filename, quote=True)}" type="audio/mpeg"></audio>'
+
+                    markup = re.sub(r"\[anki:play:([qa]):(\d+)\]", web_audio, markup)
+                    body = '<body><div id="quiz"><div id="qa_box" class="card card1"><div id="qa">' + markup + '</div></div></div></body>'
+                else:
+                    # The GUI supplies replay controls; this bridge only records clicks.
+                    markup = re.sub(r"\[anki:play:([qa]):(\d+)\]", lambda m:
+                        f'<a class="replay-button soundLink" href="playsound:{m[1]}:{m[2]}" '
+                        f'onclick="window.__nativeActions.push(\'{m[1]}:{m[2]}\'); return false;">'
+                        '<svg viewBox="0 0 64 64"><path d="M24 16 48 32 24 48Z"/></svg></a>', markup)
+                    body = '<body class="card"><script>window.__nativeActions=[];</script>' + markup + '</body>'
                 document = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
                             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-                            '<script>window.__nativeActions=[];</script></head><body class="card">' + markup + '</body></html>')
+                            '</head>' + body + '</html>')
                 (media / f"_preview_{ident}_{side}.html").write_text(document, encoding="utf-8")
         server = http.server.ThreadingHTTPServer(("127.0.0.1", port), functools.partial(QuietHandler, directory=str(media)))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -82,6 +126,13 @@ def browser():
 def rendered(built, tmp_path_factory):
     out, manifest, _ = built
     with served_cards(out, manifest, tmp_path_factory.mktemp("rendered-cards")) as rendered:
+        yield rendered[0]
+
+
+@pytest.fixture(scope="module")
+def web_rendered(built, tmp_path_factory):
+    out, manifest, _ = built
+    with served_cards(out, manifest, tmp_path_factory.mktemp("web-cards"), host="web") as rendered:
         yield rendered[0]
 
 
@@ -377,6 +428,281 @@ def test_unavailable_native_bridge_and_rejected_playback(browser, rendered):
         assert page.locator("audio").is_visible()
     finally:
         page.close()
+
+
+@pytest.mark.parametrize("side", ["front", "back"])
+@pytest.mark.parametrize("width,theme", [(320, "light"), (960, "nightMode")])
+def test_ankiweb_host_layout_and_speaker_buttons(browser, web_rendered, side, width, theme):
+    page = browser.new_page(viewport={"width": width, "height": 720})
+    page.add_init_script(WEB_AUDIO)
+    failures = []
+    page.on("pageerror", lambda error: failures.append(str(error)))
+    try:
+        open_card(page, web_rendered, "alpha", side, os_theme="dark" if theme == "light" else "light")
+        page.locator("#qa_box").evaluate("(box, theme) => box.classList.add(theme)", theme)
+        page.add_style_tag(content=".card button { margin: 6px 10px; min-width: 80px; min-height: 52px; }")
+        assert page.locator("#quiz > #qa_box.card.card1 > #qa > .wa-card").count() == 1
+        assert page.locator("body.card, .replay-button, .soundLink").count() == 0
+        assert page.evaluate("typeof window.__nativeActions") == "undefined"
+        assert page.locator(".wa-native-stop").inner_html().strip() == ""
+        assert_layout(page, theme=theme, side=side)
+        assert page.locator("audio:visible, .wa-native-audio:visible").count() == 0
+        assert page.locator("audio").evaluate_all("items => items.every(audio => !audio.controls && !audio.autoplay)")
+        buttons = page.locator(".wa-manual-button")
+        assert buttons.count() == (2 if side == "front" else 4)
+        speaker = page.locator('[data-accent="us"] .wa-manual-button svg').evaluate("svg => svg.outerHTML")
+        for button in buttons.all():
+            assert button.is_visible() and button.is_enabled()
+            assert button.get_attribute("aria-label")
+            assert button.locator("svg").evaluate("svg => svg.outerHTML") == speaker
+            box = button.bounding_box()
+            assert box["width"] == box["height"] == (36 if side == "back" and width >= 760 else 44)
+        for wrapper in page.locator(".wa-native-audio").all():
+            assert wrapper.evaluate("e => e.parentElement.querySelectorAll(':scope > .wa-manual-button').length") == 1
+        for group in page.locator(".wa-pronunciation").all():
+            pill, button = group.locator(".wa-ipa-pill").bounding_box(), group.locator(".wa-manual-button").bounding_box()
+            if width < 360:
+                assert button["y"] >= pill["y"] + pill["height"]
+            else:
+                assert abs(button["y"] - pill["y"]) < 1
+                assert button["x"] < pill["x"]
+        expect(page.locator(".wa-audio-status")).to_be_hidden()
+        assert failures == []
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("side,missing,expected", [
+    ("front", [], ["uk"]),
+    ("front", ["UK pronunciation"], []),
+    ("back", [], ["uk", "ex1"]),
+    ("back", ["UK pronunciation"], ["ex1"]),
+    ("back", ["First example"], ["uk"]),
+    ("back", ["UK pronunciation", "First example"], []),
+])
+def test_ankiweb_autoplay_order_and_missing_recordings(browser, web_rendered, side, missing, expected):
+    page = browser.new_page()
+    page.add_init_script(WEB_AUDIO)
+
+    def omit_recordings(route):
+        response = route.fetch()
+        markup = response.text()
+        for label in missing:
+            markup = re.sub(r'<span class="wa-native-audio" data-audio-label="' + re.escape(label) + r'">.*?</span>', "", markup)
+        route.fulfill(response=response, body=markup)
+
+    page.route("**/_preview_alpha_*.html", omit_recordings)
+    try:
+        open_card(page, web_rendered, "alpha", side)
+        assert page.evaluate("window.__attempts") == expected[:1]
+        for index, kind in enumerate(expected):
+            assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == [kind]
+            page.locator("audio").evaluate_all("items => { const audio = items.find(audio => !audio.paused); audio.__paused = audio.__ended = true; audio.dispatchEvent(new Event('ended')); }")
+            assert page.evaluate("window.__attempts") == expected[:index + 2]
+        assert page.locator("audio").evaluate_all("items => items.every(audio => audio.paused)")
+        expect(page.locator(".wa-audio-status")).to_be_hidden()
+        assert page.locator("audio:visible").count() == 0
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("manual", ["us", "ex2"])
+def test_ankiweb_manual_interruption_and_r_replay(browser, web_rendered, manual):
+    page = browser.new_page()
+    page.add_init_script(WEB_AUDIO)
+    try:
+        open_card(page, web_rendered, "alpha", "back")
+        button = (page.locator('[data-accent="us"] .wa-manual-button') if manual == "us" else
+                  page.locator('.wa-example').last.locator(".wa-manual-button"))
+        button.click()
+        assert page.evaluate("window.__attempts") == ["uk", manual]
+        assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == [manual]
+        expect(button).to_have_attribute("aria-pressed", "true")
+        page.locator('[data-accent="uk"] audio').dispatch_event("ended")
+        assert page.evaluate("window.__attempts") == ["uk", manual]
+        button.click()
+        assert page.locator("audio").evaluate_all("items => items.every(audio => audio.paused)")
+        page.locator("audio").evaluate_all("items => items.forEach(audio => audio.dispatchEvent(new Event('ended')))")
+        assert page.evaluate("window.__attempts") == ["uk", manual]
+        page.keyboard.press("r")
+        assert page.evaluate("window.__attempts") == ["uk", manual, "uk"]
+        page.locator('[data-accent="uk"] audio').evaluate("audio => { audio.__paused = audio.__ended = true; audio.dispatchEvent(new Event('ended')); }")
+        assert page.evaluate("window.__attempts") == ["uk", manual, "uk", "ex1"]
+        assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == ["ex1"]
+        page.locator('[data-accent="us"] .wa-ipa-pill').press("Enter")
+        assert page.evaluate("window.__attempts") == ["uk", manual, "uk", "ex1", "us"]
+        assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == ["us"]
+    finally:
+        page.close()
+
+
+def test_ankiweb_rejected_autoplay_keeps_buttons_and_allows_retry(browser, web_rendered):
+    page = browser.new_page()
+    page.add_init_script(WEB_AUDIO + "window.__rejectPlay = true;")
+    try:
+        open_card(page, web_rendered, "alpha", "back")
+        assert page.evaluate("window.__attempts") == ["uk"]
+        status = page.locator(".wa-audio-status")
+        expect(status).to_be_hidden()
+        expect(status).to_have_text("")
+        assert page.locator("audio:visible, audio[controls]").count() == 0
+        assert page.locator(".wa-manual-button:visible").count() == 4
+        # Explicit playback failures still report an error; only autoplay is silent.
+        page.locator('[data-accent="us"] .wa-manual-button').click()
+        expect(status).to_be_visible()
+        expect(status).to_contain_text(re.compile(r"speaker|button|retry", re.IGNORECASE))
+        page.evaluate("window.__rejectPlay = false")
+        button = page.locator('[data-accent="uk"] .wa-manual-button')
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(status).to_be_hidden()
+        page.locator('[data-accent="uk"] audio').evaluate("audio => { audio.__paused = audio.__ended = true; audio.dispatchEvent(new Event('ended')); }")
+        assert page.evaluate("window.__attempts") == ["uk", "us", "uk"]
+        page.locator(".wa-example").last.locator(".wa-manual-button").click()
+        assert page.evaluate("window.__attempts") == ["uk", "us", "uk", "ex2"]
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("retry", ["uk", "us"])
+def test_ankiweb_old_play_rejection_does_not_overwrite_new_state(browser, web_rendered, retry):
+    page = browser.new_page()
+    page.add_init_script(WEB_AUDIO + "window.__deferPlay = true;")
+    failures = []
+    page.on("pageerror", lambda error: failures.append(str(error)))
+    try:
+        open_card(page, web_rendered, "alpha", "back")
+        assert page.evaluate("window.__pending.length") == 1
+        page.evaluate("window.__deferPlay = false")
+        button = page.locator(f'[data-accent="{retry}"] .wa-manual-button')
+        button.click()
+        page.evaluate("window.__pending[0].reject(new DOMException('old attempt', 'NotAllowedError'))")
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(page.locator(".wa-audio-status")).to_be_hidden()
+        assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == [retry]
+        assert page.evaluate("window.__attempts") == ["uk", retry]
+        assert page.locator("audio:visible, audio[controls]").count() == 0
+        assert failures == []
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("event", ["visibilitychange", "pagehide", "bfcache", "replacement"])
+def test_ankiweb_reinitialization_and_lifecycle_cancel_queue(browser, web_rendered, event):
+    page = browser.new_page()
+    page.add_init_script(WEB_AUDIO)
+    try:
+        open_card(page, web_rendered, "alpha", "back")
+        script = (ROOT / "templates/card.js").read_text(encoding="utf-8")
+        page.evaluate(script)
+        page.evaluate(script)
+        assert page.locator(".wa-manual-button:visible").count() == 4
+        assert page.evaluate("window.__attempts") == ["uk", "uk", "uk"]
+        page.locator('[data-accent="us"] .wa-ipa-pill').press("Space")
+        assert page.evaluate("window.__attempts") == ["uk", "uk", "uk", "us"]
+        page.keyboard.press("r")
+        assert page.evaluate("window.__attempts") == ["uk", "uk", "uk", "us", "uk"]
+        page.evaluate("window.oldAudio = Array.from(document.querySelectorAll('audio'))")
+        if event == "visibilitychange":
+            page.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, value: true}); document.dispatchEvent(new Event('visibilitychange'))")
+        elif event == "pagehide":
+            page.evaluate("window.dispatchEvent(new Event('pagehide'))")
+        elif event == "bfcache":
+            page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}))")
+        else:
+            page.locator("#qa").evaluate("qa => qa.replaceChildren()")
+        assert page.evaluate("window.oldAudio.every(audio => audio.paused)")
+        if event in ("pagehide", "replacement"):
+            page.wait_for_function("!window.__wordAtlasCard")
+        page.evaluate("window.oldAudio.forEach(audio => audio.dispatchEvent(new Event('ended')))")
+        assert page.evaluate("window.__attempts") == ["uk", "uk", "uk", "us", "uk"]
+        if event in ("visibilitychange", "bfcache"):
+            if event == "visibilitychange":
+                page.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, value: false}); document.dispatchEvent(new Event('visibilitychange'))")
+            else:
+                page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}))")
+            assert page.evaluate("window.__attempts") == ["uk", "uk", "uk", "us", "uk"]
+            assert page.locator(".wa-manual-button:visible").count() == 4
+            assert page.locator("audio:visible, audio[controls]").count() == 0
+            page.locator('[data-accent="uk"] .wa-manual-button').click()
+        elif event == "replacement":
+            # AnkiWeb replaces #qa and then recreates its scripts on each card.
+            page.evaluate("""async url => {
+              const doc = new DOMParser().parseFromString(await (await fetch(url)).text(), 'text/html');
+              const qa = document.querySelector('#qa');
+              qa.innerHTML = doc.querySelector('#qa').innerHTML;
+              qa.querySelectorAll('script').forEach(old => {
+                const script = document.createElement('script'); script.textContent = old.textContent; old.replaceWith(script);
+              });
+            }""", f"{web_rendered}/_preview_alpha_front.html")
+            assert page.locator(".wa-manual-button:visible").count() == 2
+            page.evaluate("window.oldAudio.forEach(audio => audio.dispatchEvent(new Event('ended')))")
+        else:
+            return
+        assert page.evaluate("window.__attempts") == ["uk", "uk", "uk", "us", "uk", "uk"]
+        assert page.locator("audio").evaluate_all("items => items.filter(audio => !audio.paused).map(window.__audioKind)") == ["uk"]
+    finally:
+        page.close()
+
+
+def test_ankiweb_html_only_fallback_has_real_audio_without_bridge(browser, web_rendered):
+    page = browser.new_page(java_script_enabled=False)
+    try:
+        page.goto(f"{web_rendered}/_preview_alpha_back.html", wait_until="networkidle")
+        assert page.locator("audio[controls]:visible").count() == 4
+        assert page.locator(".wa-manual-button:visible, .replay-button, .soundLink, audio[autoplay]").count() == 0
+        assert page.locator(".wa-native-stop").inner_html().strip() == ""
+        sources = page.locator('.wa-native-audio audio > source[type="audio/mpeg"]')
+        assert sources.count() == 2
+        for source in sources.all():
+            assert source.get_attribute("src").endswith(".mp3")
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("initially_missing", [False, True])
+def test_ankiweb_real_mp3_autoplay_queue(browser, web_rendered, initially_missing):
+    # Permit autoplay explicitly; policy rejection is covered separately above.
+    media_browser = browser.browser_type.launch(
+        headless=True, executable_path=os.environ.get("WA_BROWSER_EXECUTABLE"),
+        args=["--autoplay-policy=no-user-gesture-required"],
+    )
+    page = media_browser.new_page()
+    page.add_init_script(AUDIO_EVENTS)
+    failures = []
+    page.on("pageerror", lambda error: failures.append(str(error)))
+    if initially_missing:
+        page.route("**/*.mp3", lambda route: route.fulfill(status=404, body="Not synced yet"))
+    try:
+        open_card(page, web_rendered, "alpha", "back")
+        if initially_missing:
+            status = page.locator(".wa-audio-status")
+            expect(status).to_be_visible()
+            expect(status).to_contain_text(re.compile(r"sync|retry", re.IGNORECASE))
+            assert page.locator(".wa-manual-button:visible").count() == 4
+            assert page.locator("audio:visible, audio[controls]").count() == 0
+            assert page.locator("audio").evaluate_all("items => items.every(audio => audio.paused)")
+            page.unroute("**/*.mp3")
+            page.evaluate("window.__mediaEvents = []")
+            page.locator('[data-accent="uk"] .wa-manual-button').click()
+            page.wait_for_function("window.__mediaEvents.some(event => event.type === 'ended' && event.kind === 'uk')")
+            assert page.evaluate("window.__mediaEvents.map(event => [event.type, event.kind])") == [["play", "uk"], ["ended", "uk"]]
+            expect(status).to_be_hidden()
+            page.evaluate("window.__mediaEvents = []")
+            page.keyboard.press("r")
+        page.wait_for_function("window.__mediaEvents.some(event => event.type === 'ended' && event.kind === 'ex1')")
+        events = page.evaluate("window.__mediaEvents")
+        assert [(event["type"], event["kind"]) for event in events] == [
+            ("play", "uk"), ("ended", "uk"), ("play", "ex1"), ("ended", "ex1"),
+        ]
+        assert all(event["active"] <= 1 for event in events)
+        assert page.locator("audio").evaluate_all("items => items.every(audio => audio.paused)")
+        assert page.locator(".wa-native-audio audio").evaluate_all("items => items.every(audio => Number.isFinite(audio.duration) && audio.duration > 0)")
+        assert page.locator("audio:visible, .wa-manual-button[aria-pressed='true']").count() == 0
+        expect(page.locator(".wa-audio-status")).to_be_hidden()
+        assert failures == []
+    finally:
+        media_browser.close()
 
 
 @pytest.mark.parametrize("width", [320, 360, 390, 480])

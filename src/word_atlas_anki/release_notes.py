@@ -59,7 +59,7 @@ def release_notes(manifest, changes):
         lines += ["", "## 导入与兼容", "",
                   "- 先备份集合与媒体，再导入 `.apkg`。更新时直接导入新版，不要先删除旧牌组；本地字段和标签的更新注意事项见 README。",
                   "- 开启自动播放和重播按钮，并设置反面重播时跳过正面音频。默认正面播放英音，反面播放英音与第一句；美音和第二句手动播放。",
-                  "- 面向 Anki Desktop、AnkiDroid 和 AnkiMobile，媒体可离线使用；不承诺 AnkiWeb 兼容。", "",
+                  "- 兼容 Anki Desktop、AnkiDroid、AnkiMobile 和 AnkiWeb。", "",
                   "## 来源与许可", "",
                   f"- 词库、插画和成品录音来自 [Word Atlas]({UPSTREAM_REPO})，采用 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)；本项目是非官方 Anki 适配。",
                   "- 转换代码采用 MIT，字体和图标保留各自许可。上游内容由 AI 生成，建议核对；完整许可随牌组保留。"]

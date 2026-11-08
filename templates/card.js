@@ -26,7 +26,11 @@
   }
 
   var replaySelector = ".replay-button, .soundLink, a[href^='playsound:'], a[href^='sound:']";
+  var isAnkiWeb = !!root.closest("#quiz");
   var players = [];
+  var automaticPlayers = [];
+  var queue = [];
+  var activePlayer;
   var listeners = [];
   var observer;
   var disposed = false;
@@ -52,6 +56,8 @@
   }
 
   function interruptNative() {
+    // AnkiWeb's audio elements are already stopped by stopAll().
+    if (isAnkiWeb) return true;
     var control = stopControl();
     if (!control || typeof control.click !== "function") return false;
     try {
@@ -79,6 +85,8 @@
 
   function stopAll() {
     playSerial += 1;
+    queue = [];
+    activePlayer = null;
     players.forEach(stopPlayer);
   }
 
@@ -106,21 +114,47 @@
       showControls(player, "Native audio cannot be interrupted here. Wait for it to finish, then use the audio controls.");
       return;
     }
+    playAudio(player, false);
+  }
+
+  function playAudio(player, automatic) {
     var attempt = playSerial;
+    activePlayer = player;
     message("");
-    try {
-      // This is only called directly by a click or keyboard activation.
-      var result = player.audio.play();
-      if (result && typeof result.catch === "function") {
-        result.catch(function () {
-          if (disposed || attempt !== playSerial) return;
-          playing(player, false);
-          showControls(player, "Playback did not start. Use the audio controls to retry, and check that this recording is synced.");
-        });
+    function failed(error) {
+      if (disposed || attempt !== playSerial || activePlayer !== player) return;
+      playing(player, false);
+      if (isAnkiWeb) {
+        stopAll();
+        message(automatic && error && error.name === "NotAllowedError"
+          ? ""
+          : "Playback did not start. Use a speaker button to retry, and check that this recording is synced.");
+      } else {
+        showControls(player, "Playback did not start. Use the audio controls to retry, and check that this recording is synced.");
       }
-    } catch (error) {
-      showControls(player, "Playback did not start. Use the audio controls to retry, and check that this recording is synced.");
     }
+    try {
+      if (isAnkiWeb && (player.audio.error || player.audio.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
+        player.audio.load();
+      }
+      var result = player.audio.play();
+      if (result && typeof result.catch === "function") result.catch(failed);
+    } catch (error) {
+      failed(error);
+    }
+  }
+
+  function playNext() {
+    if (disposed || document.hidden) return;
+    var player = queue.shift();
+    if (player) playAudio(player, true);
+  }
+
+  function replayAutomatic() {
+    stopAll();
+    queue = automaticPlayers.slice();
+    message("");
+    playNext();
   }
 
   function activatePill(pill, label, action) {
@@ -157,19 +191,49 @@
     var audio = wrapper.querySelector("audio.wa-manual-audio");
     var media = wrapper.querySelector(".wa-manual-media");
     if (!audio || !media) return;
-    var player = {
+    players.push({
       audio: audio,
       media: media,
       button: wrapper.querySelector(".wa-manual-button"),
       pill: wrapper.querySelector(".wa-ipa-pill"),
       label: wrapper.getAttribute("data-audio-label") || "recording"
-    };
-    players.push(player);
+    });
+  });
+
+  if (isAnkiWeb) {
+    // AnkiWeb expands [sound:] to <audio>, without a native replay bridge.
+    Array.prototype.forEach.call(root.querySelectorAll(".wa-native-audio"), function (wrapper) {
+      var audio = wrapper.querySelector("audio");
+      if (!audio) return;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "wa-manual-button";
+      button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m11 5-6 4H2v6h3l6 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
+      wrapper.before(button);
+      var group = wrapper.closest(".wa-pronunciation");
+      var player = {
+        audio: audio,
+        media: wrapper,
+        button: button,
+        pill: group && group.querySelector(".wa-ipa-pill"),
+        label: wrapper.getAttribute("data-audio-label") || "recording",
+        webNative: true
+      };
+      players.push(player);
+      automaticPlayers.push(player);
+    });
+  }
+
+  players.forEach(function (player) {
+    var audio = player.audio;
+    var media = player.media;
+    player.originalControls = audio.controls;
     audio.preload = "none";
     playing(player, false);
 
-    if (player.button && stopControl()) {
+    if (player.button && (isAnkiWeb || stopControl())) {
       media.hidden = true;
+      if (isAnkiWeb) audio.controls = false;
       player.button.hidden = false;
       listen(player.button, "click", function (event) {
         event.preventDefault();
@@ -192,6 +256,10 @@
 
     listen(audio, "play", function () {
       if (disposed) return;
+      if (isAnkiWeb && activePlayer !== player) {
+        stopPlayer(player);
+        return;
+      }
       players.forEach(function (other) {
         if (other !== player) stopPlayer(other);
       });
@@ -206,11 +274,26 @@
       playing(player, true);
     });
     listen(audio, "pause", function () { playing(player, false); });
-    listen(audio, "ended", function () { playing(player, false); });
+    listen(audio, "ended", function () {
+      if (isAnkiWeb && !audio.ended) return;
+      playing(player, false);
+      if (isAnkiWeb && activePlayer === player) {
+        activePlayer = null;
+        playNext();
+      }
+    });
+    // A failed AnkiWeb <source> emits a non-bubbling error below <audio>.
     listen(audio, "error", function () {
       playing(player, false);
-      showControls(player, "This recording could not be loaded. Check media sync, then retry with the audio controls.");
-    });
+      if (isAnkiWeb) {
+        // An old request's error must not cancel a different recording.
+        if (activePlayer !== player) return;
+        stopAll();
+        message("This recording could not be loaded. Check media sync, then retry with a speaker button.");
+      } else {
+        showControls(player, "This recording could not be loaded. Check media sync, then retry with the audio controls.");
+      }
+    }, isAnkiWeb);
   });
 
   Array.prototype.forEach.call(root.querySelectorAll(".wa-native-audio"), function (wrapper) {
@@ -244,9 +327,15 @@
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
     var replayKey = (event.key === "Enter" || event.key === " ") && target && target.closest && target.closest(replaySelector);
-    if (replayKey || event.key === "r" || event.key === "R" || event.code === "KeyR" || event.keyCode === 82) {
-      stopAll();
-      if (stopControl()) message("");
+    var replayAll = event.key === "r" || event.key === "R" || event.code === "KeyR" || event.keyCode === 82;
+    if (replayKey || replayAll) {
+      if (isAnkiWeb && replayAll) {
+        event.preventDefault();
+        if (!event.repeat) replayAutomatic();
+      } else {
+        stopAll();
+        if (stopControl()) message("");
+      }
     }
   }, true);
 
@@ -259,7 +348,9 @@
     // Restore the HTML-only fallback if the same root is initialized again.
     players.forEach(function (player) {
       player.media.hidden = false;
-      if (player.button) player.button.hidden = true;
+      player.audio.controls = player.originalControls;
+      if (player.webNative) player.button.remove();
+      else if (player.button) player.button.hidden = true;
       if (player.pill) {
         player.pill.removeAttribute("role");
         player.pill.removeAttribute("tabindex");
@@ -272,7 +363,10 @@
   }
 
   window[namespace] = { cleanup: cleanup };
-  listen(window, "pagehide", cleanup);
+  listen(window, "pagehide", function (event) {
+    if (isAnkiWeb && event.persisted) stopAll();
+    else cleanup();
+  });
   listen(document, "visibilitychange", function () {
     if (document.hidden) stopAll();
   });
@@ -284,4 +378,5 @@
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
+  if (isAnkiWeb && !document.hidden) replayAutomatic();
 }());
